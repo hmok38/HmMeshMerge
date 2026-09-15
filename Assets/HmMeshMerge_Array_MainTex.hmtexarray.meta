@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 4086b813c32eb80469a86106e6110176
+guid: 99604d0e03cf7324b852f0eec4303b06
 ScriptedImporter:
   internalIDToNameTable: []
   externalObjects: {}
@@ -9,5 +9,5 @@ ScriptedImporter:
   assetBundleVariant: 
   script: {fileID: 11500000, guid: 1ae740eea61ba8c4e910f0a3ddb6a1bd, type: 3}
   _textures:
-  - {fileID: 10900, guid: 0000000000000000f000000000000000, type: 0}
-  - {fileID: 10309, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2800000, guid: 85b01d6b406e16042864bfc2bd547e25, type: 3}
+  - {fileID: 2800000, guid: ef36f4ce689513f4f900f8b364c398b9, type: 3}

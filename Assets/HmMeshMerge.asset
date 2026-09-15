@@ -21,16 +21,13 @@ MonoBehaviour:
   - propertyName: _BaseMap
     row: 0
     active: 1
-  - propertyName: _BaseColor
+  - propertyName: _MainTex
     row: 1
     active: 1
-  - propertyName: _MainTex
+  - propertyName: _BaseColor
     row: 2
     active: 1
-  - propertyName: _Color
-    row: 3
-    active: 1
-  _mergedMesh: {fileID: 4300000, guid: c254535082413a64e922cb344027beaf, type: 2}
-  _material: {fileID: 2100000, guid: 309d93de78b71d046b699fc71af9ad55, type: 2}
+  _mergedMesh: {fileID: 4300000, guid: a4e15de25fb871d4e816232ee5e5a0d0, type: 2}
+  _material: {fileID: 2100000, guid: 78d15ee69fb29274c952328fbf24a0c4, type: 2}
   indexChannel: 3
-  outputShader: {fileID: 4800000, guid: a72ba61be0a7f6f469a1a27b299eca28, type: 3}
+  outputShader: {fileID: 4800000, guid: 9f7c82bd2e99d4a4a923ee46ea2f8b35, type: 3}
