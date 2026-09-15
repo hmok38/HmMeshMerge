@@ -1,0 +1,426 @@
+﻿# Unity 项目 EditorConfig 模板（基于 Merge2Unity 当前配置）
+# 人工与 AI 审核依据：docs/CodeStyleGuide.md §16、docs/CodeStructureGuide.md §14、项目级补充。
+# 2026-09-08 确认：LF、UTF-8 BOM；格式/可见性 warning；命名 suggestion；
+# var、this.、表达式体和 new() 不强制；120 字符尽量换行；普通异步方法建议 Async 后缀。
+#
+# 使用说明：
+# 1. 随仓库提交；Rider 开启 EditorConfig 支持后，在编辑、格式化/代码清理时读取。
+# 2. 本文件不启动自动保存、格式化、Unity Reload 或构建，也不批量迁移旧代码。
+# 3. 文件内后面的匹配段覆盖前面的同名设置；unset 表示撤销该属性的 EditorConfig 配置。
+# 4. 标准属性管理文本；csharp_/dotnet_ 由 C# 工具读取；resharper_ 和 disable_formatter 为 Rider 扩展。
+# 5. IDE、Roslyn 和 Unity 分析器版本不同，支持程度也不同；warning 不等于构建门禁。
+# 6. 新旧代码都会匹配规则；涉及序列化、协议、存档键和公开 API 的命名提示不可直接批量修复。
+# 7. 不设置全仓库 [*] 或 [*.cs] 基线，避免规则进入第三方、UPM 包、Unity 资源和构建产物。
+# 8. 本模板文件名不会自动生效；使用时复制到目标项目根目录并重命名为 .editorconfig。
+# 9. 提交前审核以目标项目根目录实际生效的 .editorconfig 为准，不能用本模板替代实际检查。
+# 10. 自动化范围仅含文本、格式和分析器可识别的部分命名规则；程序集、命名空间、目录、代码放置等
+#     规范项由人工或 AI 依据两份规范进行静态核验。
+# 11. 功能实现、业务逻辑、算法正确性、运行结果、性能和测试充分性不属于本模板及规范性审核范围。
+# 12. 人工或 AI 必须记录实际运行的 IDE/分析器/命令、目标目录和结果；只读取本文件不算已执行检查。
+# 13. 复制到其他项目之前，必须评审下方源码、生成代码和第三方目录选择器以及项目历史例外。
+#
+# 配置参考：
+# https://editorconfig.org/
+# https://learn.microsoft.com/dotnet/fundamentals/code-analysis/style-rules/csharp-formatting-options
+# https://learn.microsoft.com/dotnet/fundamentals/code-analysis/style-rules/naming-rules
+# https://www.jetbrains.com/help/rider/Using_EditorConfig.html
+# https://www.jetbrains.com/help/rider/EditorConfig_CSHARP_LineBreaksPageSchema.html
+# https://www.jetbrains.com/help/rider/EditorConfig_CSHARP_BlankLinesPageScheme.html
+
+# 仓库为规则边界，不继承父目录中的 .editorconfig。
+root = true
+
+# -----------------------------------------------------------------------------
+# 1. 项目手写 C#：运行时、UI、项目 Editor 和 EditorTools。
+# **/ 包含零层或多层子目录；下方另行排除已确认的生成文件。
+# Assets/ConfigCode、HybridCLRGenerate、FairyGUI、Plugins、DOTween、Feel、Wb、
+# TextMesh Pro、ExternalDependencyManager、GooglePlayPlugins、Packages 等不在此范围。
+# 新增源码根目录或引入第三方代码时，必须同步评审这里的范围。
+# -----------------------------------------------------------------------------
+[Assets/{Scripts,Editor,EditorTools}/**/*.cs]
+
+# 1.1 文本：4 空格、LF、UTF-8 BOM、文件末尾换行、移除行尾空白。
+charset = utf-8-bom
+end_of_line = lf
+indent_style = space
+indent_size = 4
+tab_width = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 120
+
+# 明确手写属性，防止“首次生成后由开发者维护”的脚手架因文件头被当成生成代码。
+# 例如 UIPlotChangePanel.cs 是可维护源码；对应 .Bind.cs 在末尾单独排除。
+generated_code = false
+
+# 1.2 缩进：花括号与声明同级，块内容缩进一级；switch 的标签和内容逐级缩进。
+csharp_indent_braces = false
+csharp_indent_block_contents = true
+csharp_indent_switch_labels = true
+csharp_indent_case_contents = true
+csharp_indent_case_contents_when_block = true
+csharp_indent_labels = one_less_than_current
+
+# 1.3 Allman：类型、方法、控制块等左花括号换行；else/catch/finally 另起一行。
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_before_members_in_object_initializers = true
+csharp_new_line_before_members_in_anonymous_types = true
+csharp_new_line_between_query_expression_clauses = true
+csharp_preserve_single_line_blocks = false
+csharp_preserve_single_line_statements = false
+resharper_csharp_brace_style = next_line
+resharper_csharp_place_simple_blocks_on_single_line = false
+resharper_csharp_place_simple_embedded_statement_on_same_line = false
+resharper_csharp_place_simple_case_statement_on_same_line = false
+resharper_csharp_keep_existing_embedded_arrangement = false
+
+# 1.4 控制语句必须有花括号；格式化不一定补齐，必要时应用代码清理/快速修复。
+csharp_prefer_braces = true:warning
+dotnet_diagnostic.IDE0011.severity = warning
+resharper_csharp_braces_for_ifelse = required
+resharper_csharp_braces_for_for = required
+resharper_csharp_braces_for_foreach = required
+resharper_csharp_braces_for_while = required
+resharper_csharp_braces_for_dowhile = required
+resharper_csharp_braces_for_using = required
+resharper_csharp_braces_for_lock = required
+resharper_csharp_braces_for_fixed = required
+resharper_enforce_if_statement_braces_highlighting = warning
+resharper_enforce_for_statement_braces_highlighting = warning
+resharper_enforce_foreach_statement_braces_highlighting = warning
+resharper_enforce_while_statement_braces_highlighting = warning
+resharper_enforce_do_while_statement_braces_highlighting = warning
+resharper_enforce_using_statement_braces_highlighting = warning
+resharper_enforce_lock_statement_braces_highlighting = warning
+resharper_enforce_fixed_statement_braces_highlighting = warning
+
+# 1.5 空格：if (condition)、Call(arg1, arg2)、int[]；二元运算符两侧有空格。
+# 括号内部无空格；继承冒号两侧有空格；for 的分号后有空格。
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_between_method_declaration_name_and_open_parenthesis = false
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+csharp_space_between_method_declaration_empty_parameter_list_parentheses = false
+csharp_space_between_method_call_name_and_opening_parenthesis = false
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_method_call_empty_parameter_list_parentheses = false
+csharp_space_between_parentheses = none
+csharp_space_after_cast = false
+csharp_space_around_binary_operators = before_and_after
+csharp_space_before_comma = false
+csharp_space_after_comma = true
+csharp_space_before_dot = false
+csharp_space_after_dot = false
+csharp_space_before_semicolon_in_for_statement = false
+csharp_space_after_semicolon_in_for_statement = true
+csharp_space_before_colon_in_inheritance_clause = true
+csharp_space_after_colon_in_inheritance_clause = true
+csharp_space_before_open_square_brackets = false
+csharp_space_between_square_brackets = false
+csharp_space_between_empty_square_brackets = false
+csharp_space_around_declaration_statements = false
+
+# 1.6 行宽：Rider 在参数、方法链、运算符等合法位置尽量按 120 字符换行。
+# 保留合理的已有换行；不强拆字符串、URL、不可分割标识符，因此不是绝对上限。
+# 按语法结构逐项开启 wrap_if_long；其他编辑器可能只显示参考线。
+resharper_csharp_max_line_length = 120
+resharper_csharp_keep_user_linebreaks = true
+resharper_csharp_wrap_parameters_style = wrap_if_long
+resharper_csharp_wrap_arguments_style = wrap_if_long
+resharper_csharp_wrap_chained_method_calls = wrap_if_long
+resharper_csharp_wrap_chained_binary_expressions = wrap_if_long
+resharper_csharp_wrap_ternary_expr_style = wrap_if_long
+resharper_csharp_wrap_object_and_collection_initializer_style = chop_always
+resharper_csharp_wrap_array_initializer_style = wrap_if_long
+resharper_csharp_wrap_before_comma = false
+
+# 1.7 空行：最多保留一个连续空行；using 后、类型/方法之间留一个空行。
+# 简单字段可连续排列；花括号内侧不额外插入空行。
+resharper_csharp_keep_blank_lines_in_declarations = 1
+resharper_csharp_keep_blank_lines_in_code = 1
+resharper_csharp_blank_lines_after_using_list = 1
+resharper_csharp_blank_lines_between_using_groups = 0
+resharper_csharp_blank_lines_around_namespace = 1
+resharper_csharp_blank_lines_inside_namespace = 0
+resharper_csharp_blank_lines_around_type = 1
+resharper_csharp_blank_lines_inside_type = 0
+resharper_csharp_blank_lines_around_invocable = 1
+resharper_csharp_blank_lines_around_single_line_invocable = 1
+resharper_csharp_blank_lines_around_property = 1
+resharper_csharp_blank_lines_around_field = 1
+resharper_csharp_blank_lines_around_single_line_field = 0
+resharper_csharp_blank_lines_around_region = 1
+resharper_csharp_blank_lines_inside_region = 0
+resharper_csharp_remove_blank_lines_near_braces_in_code = true
+
+# 1.8 using 和可见性：命名空间外，System.* 优先，其余由 IDE 排序。
+# using 重排需要整理导入/代码清理；显式接口实现等语法禁止修饰符的地方属于自然例外。
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+dotnet_style_require_accessibility_modifiers = always:warning
+dotnet_diagnostic.IDE0065.severity = warning
+dotnet_diagnostic.IDE0040.severity = warning
+dotnet_diagnostic.IDE0055.severity = warning
+
+# 1.9 命名空间按实际程序集，而不是文件夹层级确定。
+# Unity 2022.3 项目沿用 namespace Common { ... } 等块范围形式。
+# MainGameState -> MainGameSate、SubStageState -> SubGameSate 等历史映射见 AGENTS.md。
+# 禁止按目录自动补公司/产品前缀或下级命名空间；同名映射仍需程序集检查/代码评审。
+csharp_style_namespace_declarations = block_scoped:suggestion
+dotnet_diagnostic.IDE0160.severity = suggestion
+dotnet_diagnostic.IDE0161.severity = none
+dotnet_diagnostic.IDE0130.severity = none
+resharper_check_namespace_highlighting = none
+
+# -----------------------------------------------------------------------------
+# 2. 命名：建议级别，不自动重命名；沿用 UPPER_CASE 和私有静态字段 _camelCase。
+# symbol group -> naming style -> naming rule；更具体的常量规则优先于普通字段规则。
+# 不按文件数字后缀/类名猜测是否生成，不为既有存档字段生成批量改名规则。
+# -----------------------------------------------------------------------------
+dotnet_diagnostic.IDE1006.severity = suggestion
+resharper_inconsistent_naming_highlighting = suggestion
+
+# 2.1 可复用命名样式。
+dotnet_naming_style.pascal.capitalization = pascal_case
+dotnet_naming_style.camel.capitalization = camel_case
+dotnet_naming_style.interface_prefix.capitalization = pascal_case
+dotnet_naming_style.interface_prefix.required_prefix = I
+dotnet_naming_style.type_parameter_prefix.capitalization = pascal_case
+dotnet_naming_style.type_parameter_prefix.required_prefix = T
+dotnet_naming_style.underscore_camel.capitalization = camel_case
+dotnet_naming_style.underscore_camel.required_prefix = _
+dotnet_naming_style.internal_static.capitalization = camel_case
+dotnet_naming_style.internal_static.required_prefix = s_
+dotnet_naming_style.upper_case.capitalization = all_upper
+dotnet_naming_style.upper_case.word_separator = _
+dotnet_naming_style.async_pascal.capitalization = pascal_case
+dotnet_naming_style.async_pascal.required_suffix = Async
+
+# 2.2 类型（包括枚举类型）、接口、属性/事件、方法/局部函数、参数/局部变量、泛型参数。
+dotnet_naming_symbols.types.applicable_kinds = class, struct, enum, delegate
+dotnet_naming_symbols.types.applicable_accessibilities = *
+dotnet_naming_rule.types.symbols = types
+dotnet_naming_rule.types.style = pascal
+dotnet_naming_rule.types.severity = suggestion
+
+dotnet_naming_symbols.interfaces.applicable_kinds = interface
+dotnet_naming_symbols.interfaces.applicable_accessibilities = *
+dotnet_naming_rule.interfaces.symbols = interfaces
+dotnet_naming_rule.interfaces.style = interface_prefix
+dotnet_naming_rule.interfaces.severity = suggestion
+
+dotnet_naming_symbols.properties_events.applicable_kinds = property, event
+dotnet_naming_symbols.properties_events.applicable_accessibilities = *
+dotnet_naming_rule.properties_events.symbols = properties_events
+dotnet_naming_rule.properties_events.style = pascal
+dotnet_naming_rule.properties_events.severity = suggestion
+
+dotnet_naming_symbols.methods.applicable_kinds = method, local_function
+dotnet_naming_symbols.methods.applicable_accessibilities = *
+dotnet_naming_rule.methods.symbols = methods
+dotnet_naming_rule.methods.style = pascal
+dotnet_naming_rule.methods.severity = suggestion
+
+dotnet_naming_symbols.parameters_locals.applicable_kinds = parameter, local
+dotnet_naming_symbols.parameters_locals.applicable_accessibilities = *
+dotnet_naming_rule.parameters_locals.symbols = parameters_locals
+dotnet_naming_rule.parameters_locals.style = camel
+dotnet_naming_rule.parameters_locals.severity = suggestion
+
+dotnet_naming_symbols.type_parameters.applicable_kinds = type_parameter
+dotnet_naming_symbols.type_parameters.applicable_accessibilities = *
+dotnet_naming_rule.type_parameters.symbols = type_parameters
+dotnet_naming_rule.type_parameters.style = type_parameter_prefix
+dotnet_naming_rule.type_parameters.severity = suggestion
+
+# 2.3 私有字段：实例、静态和 Unity 序列化字段都用 _camelCase。
+# internal 实例字段仍遵循公司 _camelCase；internal 静态字段按公司 s_camelCase。
+# private static 会命中 private_fields；internal static 使用更具体的 internal_static_fields 规则。
+# 既有无下划线的序列化字段属于兼容名称，审核时记录但禁止不评估资产数据就批量重命名。
+# 普通字段组也会匹配常量，因此下方为 private/internal 常量提供具体的覆盖组。
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_rule.private_fields.symbols = private_fields
+dotnet_naming_rule.private_fields.style = underscore_camel
+dotnet_naming_rule.private_fields.severity = suggestion
+
+dotnet_naming_symbols.internal_fields.applicable_kinds = field
+dotnet_naming_symbols.internal_fields.applicable_accessibilities = internal
+dotnet_naming_rule.internal_fields.symbols = internal_fields
+dotnet_naming_rule.internal_fields.style = underscore_camel
+dotnet_naming_rule.internal_fields.severity = suggestion
+
+dotnet_naming_symbols.internal_static_fields.applicable_kinds = field
+dotnet_naming_symbols.internal_static_fields.applicable_accessibilities = internal
+dotnet_naming_symbols.internal_static_fields.required_modifiers = static
+dotnet_naming_rule.internal_static_fields.symbols = internal_static_fields
+dotnet_naming_rule.internal_static_fields.style = internal_static
+dotnet_naming_rule.internal_static_fields.severity = suggestion
+
+# 2.4 字段常量和局部常量用 UPPER_CASE；readonly 不等同于 const。
+dotnet_naming_symbols.constant_fields.applicable_kinds = field
+dotnet_naming_symbols.constant_fields.applicable_accessibilities = *
+dotnet_naming_symbols.constant_fields.required_modifiers = const
+dotnet_naming_rule.constant_fields.symbols = constant_fields
+dotnet_naming_rule.constant_fields.style = upper_case
+dotnet_naming_rule.constant_fields.severity = suggestion
+
+dotnet_naming_symbols.private_constants.applicable_kinds = field
+dotnet_naming_symbols.private_constants.applicable_accessibilities = private
+dotnet_naming_symbols.private_constants.required_modifiers = const
+dotnet_naming_rule.private_constants.symbols = private_constants
+dotnet_naming_rule.private_constants.style = upper_case
+dotnet_naming_rule.private_constants.severity = suggestion
+
+dotnet_naming_symbols.internal_constants.applicable_kinds = field
+dotnet_naming_symbols.internal_constants.applicable_accessibilities = internal
+dotnet_naming_symbols.internal_constants.required_modifiers = const
+dotnet_naming_rule.internal_constants.symbols = internal_constants
+dotnet_naming_rule.internal_constants.style = upper_case
+dotnet_naming_rule.internal_constants.severity = suggestion
+
+dotnet_naming_symbols.local_constants.applicable_kinds = local
+dotnet_naming_symbols.local_constants.applicable_accessibilities = local
+dotnet_naming_symbols.local_constants.required_modifiers = const
+dotnet_naming_rule.local_constants.symbols = local_constants
+dotnet_naming_rule.local_constants.style = upper_case
+dotnet_naming_rule.local_constants.severity = suggestion
+
+# 2.5 普通 async 方法/局部函数建议 PascalCase + Async，如 LoadInventoryAsync。
+# 这里只匹配 async 修饰符，不能按 Task/UniTask 返回类型筛选；无 async 的包装方法仍需评审。
+# Unity 消息、事件处理器、框架 override 和接口实现遵守既有签名。
+# 各分析器对回调/继承成员的豁免不同；若出现不适用提示，局部抑制，不能改坏既有契约。
+dotnet_naming_symbols.async_methods.applicable_kinds = method, local_function
+dotnet_naming_symbols.async_methods.applicable_accessibilities = *
+dotnet_naming_symbols.async_methods.required_modifiers = async
+dotnet_naming_rule.async_methods.symbols = async_methods
+dotnet_naming_rule.async_methods.style = async_pascal
+dotnet_naming_rule.async_methods.severity = suggestion
+
+# 命名检查边界：
+# - UI 类必须以 UI 开头、Manager/Helper 所属程序集、Attribute 后缀依赖类型语义，交由评审。
+# - 枚举成员用 PascalCase、线程静态字段用 t_camelCase；通用 symbol group 不能准确单独筛选。
+# - 已有 UI/FGUI/API 固定拼写和 E_ITEM_TYPE 等历史名称不得只因命名提示而迁移。
+# - 命名空间单层且与程序集同名、文件与主类型同名、partial 功能名同样需要结构检查。
+
+# -----------------------------------------------------------------------------
+# 3. 不强制的语法选择：关闭相关风格诊断，不指定 true/false 偏好。
+# 允许 var/显式类型、必要的 this.、表达式体/代码块、new()/new Type() 共存。
+# 关闭诊断不禁止开发者主动调用转换动作；个人代码清理配置也可能转换语法，应检查 diff。
+# 不启用语言版本升级、可空引用类型、隐式 using 或面向新 .NET SDK 的构建设置。
+# -----------------------------------------------------------------------------
+# var / 显式类型。
+dotnet_diagnostic.IDE0007.severity = none
+dotnet_diagnostic.IDE0008.severity = none
+resharper_suggest_var_or_type_built_in_types_highlighting = none
+resharper_suggest_var_or_type_simple_types_highlighting = none
+resharper_suggest_var_or_type_elsewhere_highlighting = none
+resharper_suggest_var_or_type_deconstruction_declarations_highlighting = none
+
+# this. 限定符。
+dotnet_diagnostic.IDE0003.severity = none
+dotnet_diagnostic.IDE0009.severity = none
+resharper_arrange_this_qualifier_highlighting = none
+
+# 构造函数、方法、运算符、属性、索引器、访问器、lambda、局部函数的表达式体。
+dotnet_diagnostic.IDE0021.severity = none
+dotnet_diagnostic.IDE0022.severity = none
+dotnet_diagnostic.IDE0023.severity = none
+dotnet_diagnostic.IDE0024.severity = none
+dotnet_diagnostic.IDE0025.severity = none
+dotnet_diagnostic.IDE0026.severity = none
+dotnet_diagnostic.IDE0027.severity = none
+dotnet_diagnostic.IDE0053.severity = none
+dotnet_diagnostic.IDE0061.severity = none
+resharper_arrange_constructor_or_destructor_body_highlighting = none
+resharper_arrange_method_or_operator_body_highlighting = none
+resharper_arrange_accessor_owner_body_highlighting = none
+resharper_arrange_local_function_body_highlighting = none
+
+# target-typed new；保留 Unity 工具链本来支持的语法，不建议额外语法升级。
+dotnet_diagnostic.IDE0090.severity = none
+resharper_arrange_object_creation_when_type_evident_highlighting = none
+resharper_arrange_object_creation_when_type_not_evident_highlighting = none
+
+# 其余非格式规则继续依靠代码评审或专用分析器：一行一声明、职责与程序集依赖、
+# FW 入口、禁止新增全局业务状态、取消信号、事件注销、资源释放、Unity Object 空值语义、
+# 序列化迁移、热路径分配等。本文件不声称可以完整验证这些规范，也不全局关闭安全诊断。
+
+# -----------------------------------------------------------------------------
+# 4. 仓库手写文档/配置：仅明确的路径，不对任意 *.json / *.xml 套规则。
+# ExcelJson、UIPlotChangePanel.version.json、Unity 资产及 Packages 保持来源规则。
+# -----------------------------------------------------------------------------
+# 根目录和 docs 的 Markdown；保留 Markdown 用于强制换行的行尾两个空格。
+# 不限制 Markdown 行宽，以免破坏表格、长链接和示例代码。
+[/{*.md,docs/**/*.md}]
+charset = utf-8-bom
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = false
+
+# 仓库自身的文本配置。不存在的文件不会因配置而被创建。
+[/{.editorconfig,.gitignore,.gitattributes}]
+charset = utf-8-bom
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# 若今后提交 VS Code 工作区配置或 GitHub 工作流，使用各自常用的 2 空格缩进。
+# 不扩展到 .idea 的个人状态文件、Unity 生成的 .csproj/.sln 或资源 JSON/YAML。
+[/{.vscode/*.json,.vscode/*.jsonc,.github/workflows/*.yml,.github/workflows/*.yaml}]
+charset = utf-8-bom
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# -----------------------------------------------------------------------------
+# 5. 可再生代码：在手写 C# 段之后覆盖，禁止按项目格式清理生成器输出。
+# AutoGen/.g/.g.i/.generated/.designer 是明确的生成文件命名；不把所有数字后缀或
+# 所有 .Bind.cs 一概标为生成，当前只排除已核实的 UIPlotChangePanel.Bind.cs。
+# DefineAudio.cs、DefineAudio2.cs 有明确“自动生成、请勿手改”文件头。
+# ConfigCode 和 HybridCLRGenerate 不继承上方 C# 规则，但仍给工具显式生成标记。
+# -----------------------------------------------------------------------------
+[{Assets/ConfigCode/**/*.cs,Assets/HybridCLRGenerate/**/*.cs,Assets/{Scripts,Editor,EditorTools}/**/*.{AutoGen,g,g.i,generated,designer,Designer}.cs,Assets/Scripts/Common/Define/DefineAudio{,2}.cs,Assets/Scripts/MainMenuState/GameUI/UIPlotChangePanel/UIPlotChangePanel.Bind.cs}]
+generated_code = true
+
+# Rider：禁止格式化，并在调用任意 Code Cleanup profile 时跳过这些文件。
+# 其他工具必须支持 generated_code 或另外配置排除范围；此设置不是文件系统只读保护。
+disable_formatter = true
+resharper_substitution_for_cleanup_profile = * => skip
+
+# 撤销文本转换，避免编辑器保存时改写生成器决定的编码、换行或行尾空白。
+charset = unset
+end_of_line = unset
+indent_style = unset
+indent_size = unset
+tab_width = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+max_line_length = unset
+resharper_csharp_max_line_length = unset
+
+# 关闭本文件主动启用的格式/命名诊断，不屏蔽 C# 编译器错误或其他安全检查。
+dotnet_diagnostic.IDE0011.severity = none
+dotnet_diagnostic.IDE0040.severity = none
+dotnet_diagnostic.IDE0055.severity = none
+dotnet_diagnostic.IDE0065.severity = none
+dotnet_diagnostic.IDE0160.severity = none
+dotnet_diagnostic.IDE1006.severity = none
+resharper_inconsistent_naming_highlighting = none
+resharper_enforce_if_statement_braces_highlighting = none
+resharper_enforce_for_statement_braces_highlighting = none
+resharper_enforce_foreach_statement_braces_highlighting = none
+resharper_enforce_while_statement_braces_highlighting = none
+resharper_enforce_do_while_statement_braces_highlighting = none
+resharper_enforce_using_statement_braces_highlighting = none
+resharper_enforce_lock_statement_braces_highlighting = none
+resharper_enforce_fixed_statement_braces_highlighting = none
