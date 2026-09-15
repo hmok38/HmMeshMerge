@@ -1,0 +1,36 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 52d13d21bfa3ec1499dea579d7892904, type: 3}
+  m_Name: HmMeshMerge
+  m_EditorClassIdentifier: 
+  _sources:
+  - mesh: {fileID: 4300000, guid: 043bc7d1432314b418764c5426b89e9b, type: 2}
+    material: {fileID: 2100000, guid: c08abe1b6344228429a77d3b5042282b, type: 2}
+  - mesh: {fileID: 4300000, guid: e3f595be01872354a943a0064107ca9a, type: 2}
+    material: {fileID: 2100000, guid: 0377a93c40f10b94e8df8a22efef9629, type: 2}
+  _parameters:
+  - propertyName: _BaseMap
+    row: 0
+    active: 1
+  - propertyName: _BaseColor
+    row: 1
+    active: 1
+  - propertyName: _MainTex
+    row: 2
+    active: 1
+  - propertyName: _Color
+    row: 3
+    active: 1
+  _mergedMesh: {fileID: 4300000, guid: c254535082413a64e922cb344027beaf, type: 2}
+  _material: {fileID: 2100000, guid: 309d93de78b71d046b699fc71af9ad55, type: 2}
+  indexChannel: 3
+  outputShader: {fileID: 4800000, guid: a72ba61be0a7f6f469a1a27b299eca28, type: 3}

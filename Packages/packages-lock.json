@@ -1,5 +1,11 @@
 {
   "dependencies": {
+    "com.hm.meshmerge": {
+      "version": "file:com.hm.meshmerge",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.burst": {
       "version": "1.8.21",
       "depth": 1,

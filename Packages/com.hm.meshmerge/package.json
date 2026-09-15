@@ -10,6 +10,13 @@
     "draw call",
     "mesh combine"
   ],
+  "samples": [
+    {
+      "displayName": "URP Cutout 参考 Shader",
+      "description": "展示如何接入来源索引判断、纹理数组与参数查找纹理（URP，含阴影与深度 Pass）。",
+      "path": "Samples~/UrpCutout"
+    }
+  ],
   "author": {
     "name": "HM"
   }
