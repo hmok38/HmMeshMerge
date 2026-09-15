@@ -1,0 +1,16 @@
+{
+  "name": "com.hm.meshmerge",
+  "version": "0.1.0",
+  "displayName": "Hm Mesh Merge",
+  "description": "把多个共享同一 Shader 的模型合并成 1 个 Mesh 与 1 个材质，每个顶点带来源索引，绘制时按索引只显示其中一个来源，用于降低 draw call。",
+  "unity": "2022.3",
+  "keywords": [
+    "mesh",
+    "merge",
+    "draw call",
+    "mesh combine"
+  ],
+  "author": {
+    "name": "HM"
+  }
+}
