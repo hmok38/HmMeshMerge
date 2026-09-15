@@ -1,15 +1,15 @@
-// HmMeshMerge 参考着色器（URP，Alpha 裁剪）。
+﻿// HmMeshMerge 参考着色器（URP，Alpha 裁剪）。
 // 展示三处接入点：
 //   1. 顶点着色器按来源索引隐藏不需要的来源；
 //   2. 贴图走纹理数组，层号即来源索引，UV 原样采样；
 //   3. 各来源的颜色与裁剪阈值来自参数查找纹理 _HmMeshMergeParams，
 //      用 HmMeshMerge.hlsl 的 HmMeshMergeLoadParam 按参数表行号取，不做材质参数。
-// 索引默认来自实例矩阵的 m33（HmMeshMergeIndex.WriteToMatrix），
-// 位置变换取 TransformObjectToWorld 的 xyz，索引编码不影响位置与法线。
+// 索引默认来自材质/实例属性 _MeshMergeIndex，适合先用普通 MeshRenderer 验证。
 Shader "HmMeshMerge/URP Cutout"
 {
     Properties
     {
+        _MeshMergeIndex("来源索引", Float) = 0
         _BaseMap("Base Map", 2DArray) = "" {}
         // 参数查找纹理必须在 Properties 里声明，材质才能绑定：合并工具生成的材质会把它设进来。
         _HmMeshMergeParams("Params", 2D) = "white" {}
@@ -28,11 +28,8 @@ Shader "HmMeshMerge/URP Cutout"
 
         HLSLINCLUDE
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+        #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
 
-        // 改用材质属性或 MaterialPropertyBlock 传索引时：注释掉下面这行，并在 Properties 块声明索引属性：
-        //   _MeshMergeIndex("Mesh Merge Index", Float) = 0                    在材质面板里直接调整
-        //   [PerRendererData] _MeshMergeIndex("Mesh Merge Index", Float) = 0  由 MaterialPropertyBlock 提供
-        #define HM_MESH_MERGE_INDEX_FROM_MATRIX
         // HmMeshMergeLoadParam 由该文件提供；查找纹理和普通材质属性一样要自己声明。
         #include "Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl"
 
@@ -57,17 +54,17 @@ Shader "HmMeshMerge/URP Cutout"
             float3 positionWS : TEXCOORD0;
             half3 normalWS : TEXCOORD1;
             float2 uv : TEXCOORD2;
-            float sourceIndex : TEXCOORD3;
+            nointerpolation float sourceIndex : TEXCOORD3;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
 
-        // 判断本顶点是否属于本次绘制要显示的来源；被隐藏时顶点停在 w = 0，三角形整体被裁剪。
+        // 判断本顶点是否属于本次绘制要显示的来源；被隐藏时顶点移出裁剪空间，三角形整体被裁剪。
         bool PrepareVertex(Attributes input, out Varyings output)
         {
             output = (Varyings)0;
             UNITY_SETUP_INSTANCE_ID(input);
             UNITY_TRANSFER_INSTANCE_ID(input, output);
-            output.positionCS = float4(0.0, 0.0, 0.0, 0.0);
+            output.positionCS = float4(2.0, 2.0, 2.0, 1.0);
 
             output.sourceIndex = HmMeshMergeDecodeUvIndex(input.sourceIndex.x);
             if (!HmMeshMergeIsSourceVisible(output.sourceIndex, HmMeshMergeGetActiveIndex()))
@@ -86,7 +83,7 @@ Shader "HmMeshMerge/URP Cutout"
         {
             uint index = (uint)round(input.sourceIndex);
             half4 sample = SAMPLE_TEXTURE2D_ARRAY(_BaseMap, sampler_BaseMap, input.uv, index);
-            sample.rgb *= HmMeshMergeLoadParam(_HmMeshMergeParams, input.sourceIndex, 0).rgb;   // 第 0 行
+            sample *= HmMeshMergeLoadParam(_HmMeshMergeParams, input.sourceIndex, 0);   // 第 0 行
             clip(sample.a - HmMeshMergeLoadParam(_HmMeshMergeParams, input.sourceIndex, 1).r);  // 第 1 行
             return sample;
         }
@@ -142,24 +139,38 @@ Shader "HmMeshMerge/URP Cutout"
             #pragma vertex ShadowVert
             #pragma fragment ShadowFrag
             #pragma multi_compile_instancing
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
 
             float3 _LightDirection;
+            float3 _LightPosition;
 
-            float4 ShadowVert(Attributes input) : SV_POSITION
+            Varyings ShadowVert(Attributes input)
             {
                 Varyings output;
                 if (!PrepareVertex(input, output))
                 {
-                    return output.positionCS;
+                    return output;
                 }
 
-                float3 direction = normalize(_LightDirection);
-                return TransformWorldToHClip(ApplyShadowBias(output.positionWS, output.normalWS, direction));
+                #if defined(_CASTING_PUNCTUAL_LIGHT_SHADOW)
+                    float3 direction = normalize(_LightPosition - output.positionWS);
+                #else
+                    float3 direction = _LightDirection;
+                #endif
+                output.positionCS = TransformWorldToHClip(
+                    ApplyShadowBias(output.positionWS, output.normalWS, direction));
+                #if UNITY_REVERSED_Z
+                    output.positionCS.z = min(output.positionCS.z, UNITY_NEAR_CLIP_VALUE);
+                #else
+                    output.positionCS.z = max(output.positionCS.z, UNITY_NEAR_CLIP_VALUE);
+                #endif
+                return output;
             }
 
-            half4 ShadowFrag() : SV_Target
+            half4 ShadowFrag(Varyings input) : SV_Target
             {
+                SampleBaseMap(input);
                 return 0;
             }
             ENDHLSL
@@ -179,20 +190,22 @@ Shader "HmMeshMerge/URP Cutout"
             #pragma fragment DepthFrag
             #pragma multi_compile_instancing
 
-            float4 DepthVert(Attributes input) : SV_POSITION
+            Varyings DepthVert(Attributes input)
             {
                 Varyings output;
                 if (!PrepareVertex(input, output))
                 {
-                    return output.positionCS;
+                    return output;
                 }
 
-                return TransformWorldToHClip(output.positionWS);
+                output.positionCS = TransformWorldToHClip(output.positionWS);
+                return output;
             }
 
-            half4 DepthFrag() : SV_Target
+            half4 DepthFrag(Varyings input) : SV_Target
             {
-                return 0;
+                SampleBaseMap(input);
+                return input.positionCS.z;
             }
             ENDHLSL
         }

@@ -31,6 +31,12 @@ namespace HmMeshMergeEditor
             BindAsset();
         }
 
+        private void OnDisable()
+        {
+            _serialized?.Dispose();
+            _serialized = null;
+        }
+
         private void OnGUI()
         {
             if (_asset == null)
@@ -56,14 +62,13 @@ namespace HmMeshMergeEditor
         {
             EditorGUILayout.Space();
             EditorGUILayout.HelpBox(
-                "请先新建或选择一个合并配置资产。\n" +
-                "配置资产记录源列表、参数表与通道设置，合并结果（网格、贴图数组、材质）也写回它；" +
-                "把上次的资产选回来即可继续改网格或材质后重新合并。",
+                "请先新建或选择一个合并配置资产。配置与合并结果保存在该资产中。",
                 MessageType.Info);
 
             if (GUILayout.Button("新建配置资产", GUILayout.Height(28)))
             {
                 CreateAsset();
+                GUIUtility.ExitGUI();
             }
 
             EditorGUILayout.Space();
@@ -72,6 +77,7 @@ namespace HmMeshMergeEditor
                 "选择已有配置", null, typeof(HmMeshMergeAsset), false);
             if (EditorGUI.EndChangeCheck() && selected != null)
             {
+                _serialized?.ApplyModifiedProperties();
                 _asset = selected;
                 BindAsset();
                 GUIUtility.ExitGUI();
@@ -86,6 +92,7 @@ namespace HmMeshMergeEditor
                 return;
             }
 
+            _serialized?.ApplyModifiedProperties();
             var asset = ScriptableObject.CreateInstance<HmMeshMergeAsset>();
             asset.name = Path.GetFileNameWithoutExtension(path);
             AssetDatabase.CreateAsset(asset, path);
@@ -96,10 +103,15 @@ namespace HmMeshMergeEditor
 
         private void BindAsset()
         {
+            _serialized?.Dispose();
             _serialized = _asset == null ? null : new SerializedObject(_asset);
             _sourcesProperty = _serialized == null ? null : _serialized.FindProperty(HmMeshMergeAsset.SOURCES_FIELD);
             _errors.Clear();
             _result = string.Empty;
+            if (_asset == null)
+            {
+                Debug.Log("[HmMeshMerge] 请先新建或选择一个合并配置资产。配置与合并结果保存在该资产中。");
+            }
         }
 
         private void DrawAssetSlot()
@@ -110,6 +122,7 @@ namespace HmMeshMergeEditor
                 "合并配置", _asset, typeof(HmMeshMergeAsset), false);
             if (EditorGUI.EndChangeCheck() && selected != _asset)
             {
+                _serialized?.ApplyModifiedProperties();
                 _asset = selected;
                 BindAsset();
                 GUIUtility.ExitGUI();
@@ -158,6 +171,14 @@ namespace HmMeshMergeEditor
             }
 
             EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("添加来源"))
+            {
+                int index = _sourcesProperty.arraySize++;
+                SerializedProperty element = _sourcesProperty.GetArrayElementAtIndex(index);
+                element.FindPropertyRelative(nameof(HmMeshMergeSource.mesh)).objectReferenceValue = null;
+                element.FindPropertyRelative(nameof(HmMeshMergeSource.material)).objectReferenceValue = null;
+            }
+
             if (GUILayout.Button("添加所选网格"))
             {
                 AddSelectedMeshes();
@@ -186,17 +207,13 @@ namespace HmMeshMergeEditor
 
                 EditorGUILayout.BeginHorizontal();
                 EditorGUILayout.LabelField(row.intValue.ToString(), GUILayout.Width(32));
-                EditorGUILayout.PropertyField(name, GUIContent.none);
+                // 已分配的属性名不允许改写，否则旧 Shader 的行号契约会被重新解释。
+                EditorGUILayout.LabelField(name.stringValue);
                 active.boolValue = EditorGUILayout.ToggleLeft("启用", active.boolValue, GUILayout.Width(52));
                 EditorGUILayout.EndHorizontal();
             }
 
             EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("添加参数"))
-            {
-                AppendParameter(table);
-            }
-
             if (GUILayout.Button("按源着色器列出属性"))
             {
                 FillParametersFromShader(table);
@@ -210,35 +227,29 @@ namespace HmMeshMergeEditor
             EditorGUILayout.EndHorizontal();
         }
 
-        private void AppendParameter(SerializedProperty table)
-        {
-            int row = 0;
-            for (int i = 0; i < table.arraySize; i++)
-            {
-                int value = table.GetArrayElementAtIndex(i)
-                    .FindPropertyRelative(nameof(HmMeshMergeParameterEntry.row)).intValue;
-                if (value >= row)
-                {
-                    row = value + 1;
-                }
-            }
-
-            table.InsertArrayElementAtIndex(table.arraySize);
-            SerializedProperty entry = table.GetArrayElementAtIndex(table.arraySize - 1);
-            entry.FindPropertyRelative(nameof(HmMeshMergeParameterEntry.propertyName)).stringValue = "_NewProperty";
-            entry.FindPropertyRelative(nameof(HmMeshMergeParameterEntry.row)).intValue = row;
-            entry.FindPropertyRelative(nameof(HmMeshMergeParameterEntry.active)).boolValue = true;
-        }
-
         private void FillParametersFromShader(SerializedProperty table)
         {
+            _serialized.ApplyModifiedProperties();
             if (_asset.Sources.Count == 0 || _asset.Sources[0] == null || _asset.Sources[0].material == null)
             {
                 Report("请先添加源，且第一个源要带材质，才能列出它的着色器属性。", true);
                 return;
             }
 
-            List<HmMeshMergeParameterEntry> generated = HmMeshMergeParameterWriter.BuildInitialTable(_asset.Sources);
+            Shader shader = _asset.Sources[0].material.shader;
+            foreach (HmMeshMergeSource source in _asset.Sources)
+            {
+                if (source == null || source.material == null || shader == null || source.material.shader != shader)
+                {
+                    Report("请先为每个来源指定使用同一 Shader 的材质，再刷新参数表。", true);
+                    return;
+                }
+            }
+
+            List<HmMeshMergeParameterEntry> generated =
+                HmMeshMergeParameterWriter.RefreshTable(_asset.Sources, _asset.Parameters);
+            _serialized.Update();
+            table = _serialized.FindProperty(HmMeshMergeAsset.PARAMETERS_FIELD);
             table.arraySize = generated.Count;
             for (int i = 0; i < generated.Count; i++)
             {
@@ -248,12 +259,21 @@ namespace HmMeshMergeEditor
                 entry.FindPropertyRelative(nameof(HmMeshMergeParameterEntry.active)).boolValue = generated[i].active;
             }
 
-            Report("已按源材质的差异列出属性：取值不同的排在前并启用，取值相同的排在后且停用。", false);
+            _serialized.ApplyModifiedProperties();
+            Report("已刷新属性：已有行号与选择保留；新属性追加。首次按差异排序并默认启用不同项。", false);
         }
 
         /// <summary>丢弃停用的行并重新编号；使用者已复制到自有着色器里的行号会随之失效。</summary>
         private void CompactParameterTable(SerializedProperty table)
         {
+            const string MESSAGE = "重新整理将删除停用行并重新编号，已复制到 Shader 的行号需要同步修改。";
+            Debug.LogWarning("[HmMeshMerge] " + MESSAGE, _asset);
+            if (!EditorUtility.DisplayDialog("重新整理参数表", MESSAGE, "重新整理", "取消"))
+            {
+                Report("已取消参数表重排。", false);
+                return;
+            }
+
             var names = new List<string>();
             for (int i = 0; i < table.arraySize; i++)
             {
@@ -280,8 +300,10 @@ namespace HmMeshMergeEditor
         {
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("设置", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.indexChannel)));
-            EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.outputShader)));
+            EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.indexChannel)),
+                new GUIContent("索引通道", "默认 UV3（TEXCOORD3），必须是所有源网格的空闲通道。"));
+            EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.outputShader)),
+                new GUIContent("输出 Shader", "留空时生成 URP 无光照接入模板；也可指定已接入数据契约的 Shader。"));
         }
 
         private void DrawActions()
@@ -312,40 +334,9 @@ namespace HmMeshMergeEditor
 
         private void Execute()
         {
+            _serialized.ApplyModifiedProperties();
             _errors.Clear();
             _result = string.Empty;
-
-            // 尺寸不一致可以自动对齐：询问使用者后，把较大贴图的导入 Max Size 压到最小尺寸。
-            if (HmMeshMergeBuilder.HasSizeMismatch(_asset))
-            {
-                bool confirmed = EditorUtility.DisplayDialog(
-                    "贴图尺寸不一致",
-                    "同一属性的源贴图尺寸不同，纹理数组要求各层同尺寸。\n\n" +
-                    "Unity 的 Max Size 只限制上限、不能放大小图，所以只能把较大的贴图压到最小尺寸。\n" +
-                    "反过来放大需要重新采样，会让整个数组失去平台压缩。\n\n" +
-                    "若必须保留大尺寸，请先在图像软件里把较小的贴图放大后重新导入。\n\n" +
-                    "是否把所有贴图的 Max Size 统一到最小尺寸？这会修改源贴图资产，较大贴图的画质会下降。",
-                    "统一到最小尺寸", "取消");
-                if (!confirmed)
-                {
-                    Report("已取消：贴图尺寸不一致。", true);
-                    return;
-                }
-
-                Report($"已把 {HmMeshMergeBuilder.AlignTextureSizes(_asset)} 张贴图的 Max Size 压到最小尺寸并对齐。", false);
-            }
-
-            List<string> errors = HmMeshMergeBuilder.Validate(_asset);
-            if (errors.Count > 0)
-            {
-                foreach (string error in errors)
-                {
-                    Report(error, true);
-                }
-
-                return;
-            }
-
             try
             {
                 HmMeshMergeBuilder.Build(_asset);
@@ -354,6 +345,11 @@ namespace HmMeshMergeEditor
             catch (System.Exception exception)
             {
                 Report(exception.Message, true);
+                Debug.LogException(exception, _asset);
+            }
+            finally
+            {
+                _serialized.Update();
             }
         }
 

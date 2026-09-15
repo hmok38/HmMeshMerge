@@ -1,134 +1,174 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.AssetImporters;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 
 namespace HmMeshMergeEditor
 {
-    /// <summary>
-    /// 把若干张独立贴图导入成一个纹理数组资产（.hmtexarray 源文件）。
-    /// 层号即贴图中的来源顺序，合并网格的 UV 不需要重映射。
-    ///
-    /// 格式与尺寸跟随各层源贴图：对每张源贴图声明 DependsOnArtifact 建立平台依赖，
-    /// 切换 Build Target 时源贴图先按新平台重导，本数组随之重导，因此 Android 得到 ASTC、桌面得到 BC。
-    /// 这条依赖是必须的——只声明 DependsOnSourceAsset 的话不会随平台重导。
-    /// </summary>
+    /// <summary>按源贴图的实际格式和 mip 写入可持久化的数组，依赖源贴图的导入产物。</summary>
     [ScriptedImporter(VERSION, EXTENSION)]
     public sealed class HmMeshMergeTextureArrayImporter : ScriptedImporter
     {
-        /// <summary>源文件扩展名；内容为空，导入设置保存在它对应的 .meta 里。</summary>
         public const string EXTENSION = "hmtexarray";
-
-        /// <summary>序列化字段名，供工具用 SerializedProperty 写入贴图列表。</summary>
         public const string TEXTURES_FIELD = "_textures";
+        private const int VERSION = 3;
 
-        private const int VERSION = 1;
-
-        [Tooltip("参与数组的贴图，顺序即数组的层号")]
+        [Tooltip("来源贴图，顺序即数组层号；需开启 Read/Write，以便保存实际像素数据。")]
         [SerializeField] private List<Texture2D> _textures = new List<Texture2D>();
 
-        /// <summary>参与数组的贴图，顺序即层号。</summary>
-        public List<Texture2D> Textures
-        {
-            get => _textures;
-            set => _textures = value;
-        }
+        /// <summary>读取来源顺序；修改请通过导入器的序列化设置。</summary>
+        public IReadOnlyList<Texture2D> Textures => _textures;
 
+        /// <summary>导入时记录依赖；失败也记录有效来源，修复源贴图后可重新触发导入。</summary>
         public override void OnImportAsset(AssetImportContext ctx)
         {
-            // 正常只发生在"源文件刚建、列表还没写入"的那一次导入；写入失败时这里是唯一的线索。
-            if (_textures.Count == 0)
+            foreach (Texture2D texture in _textures)
             {
-                ctx.LogImportWarning("贴图列表为空，暂不产出纹理数组；合并工具写入列表后会重新导入。");
-                return;
-            }
-
-            Texture2D master = _textures[0];
-            if (master == null)
-            {
-                ctx.LogImportError("第 0 层贴图为空。");
-                return;
-            }
-
-            for (int i = 1; i < _textures.Count; i++)
-            {
-                if (!Matches(master, _textures[i], out string reason))
+                if (texture != null)
                 {
-                    ctx.LogImportError($"第 {i} 层与第 0 层不一致：{reason}。纹理数组要求所有层同尺寸、同格式、同 mip 层数。");
-                    return;
+                    string path = AssetDatabase.GetAssetPath(texture);
+                    // 内置贴图也有非空路径和特殊 GUID，但没有可登记的导入产物。
+                    if (IsImportedAssetPath(path))
+                    {
+                        ctx.DependsOnArtifact(path);
+                    }
                 }
             }
 
-            foreach (Texture2D texture in _textures)
+            // 创建空源文件后，Builder 会立即写入引用再重导；此阶段不产生虚假警告。
+            if (_textures.Count == 0)
             {
-                ctx.DependsOnArtifact(AssetDatabase.GetAssetPath(texture));
+                return;
             }
 
-            var importer = (TextureImporter)AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(master));
-            bool hasMipmaps = importer != null ? importer.mipmapEnabled : master.mipmapCount > 1;
-            bool linear = importer != null && !importer.sRGBTexture;
-
-            var array = new Texture2DArray(master.width, master.height, _textures.Count,
-                master.format, hasMipmaps, linear);
-            for (int i = 0; i < _textures.Count; i++)
+            if (!ValidateTextures(_textures, out string reason))
             {
-                Graphics.CopyTexture(_textures[i], 0, array, i);
+                ctx.LogImportError(reason);
+                return;
             }
 
-            array.name = "TextureArray";
-            ctx.AddObjectToAsset("TextureArray", array);
-            ctx.SetMainObject(array);
+            Texture2DArray array = null;
+            try
+            {
+                Texture2D master = _textures[0];
+                bool linear = !GraphicsFormatUtility.IsSRGBFormat(master.graphicsFormat);
+                array = new Texture2DArray(master.width, master.height, _textures.Count,
+                    master.format, master.mipmapCount, linear)
+                {
+                    name = "TextureArray",
+                    filterMode = master.filterMode,
+                    wrapModeU = master.wrapModeU,
+                    wrapModeV = master.wrapModeV,
+                    wrapModeW = TextureWrapMode.Clamp,
+                    anisoLevel = master.anisoLevel,
+                    mipMapBias = master.mipMapBias
+                };
+                if (array.graphicsFormat != master.graphicsFormat || array.mipmapCount != master.mipmapCount)
+                {
+                    throw new InvalidOperationException("当前平台创建数组发生格式回退，或源贴图 mip 链不完整。");
+                }
+
+                for (int layer = 0; layer < _textures.Count; layer++)
+                {
+                    for (int mip = 0; mip < master.mipmapCount; mip++)
+                    {
+                        // 写入 CPU 数据，保证导入资产保存的内容与上传到 GPU 的内容一致。
+                        array.SetPixelData(_textures[layer].GetPixelData<byte>(mip), mip, layer);
+                    }
+                }
+
+                array.Apply(false, false);
+                ctx.AddObjectToAsset("TextureArray", array);
+                ctx.SetMainObject(array);
+                array = null;
+            }
+            catch (Exception exception)
+            {
+                ctx.LogImportError($"纹理数组导入失败：{exception}");
+            }
+            finally
+            {
+                if (array != null)
+                {
+                    DestroyImmediate(array);
+                }
+            }
         }
 
-        /// <summary>
-        /// 层之间必须能合成同一个数组：尺寸、mip 层数一致，导入设置（压缩方式、Alpha 来源、sRGB）也要一致。
-        /// 不直接比 Texture2D.format——编辑器里是未压缩格式，RGBA32 与 RGB24 的差别只在于有没有 Alpha 通道，
-        /// 打包后真正的格式由压缩设置决定，比它会把"打包后其实一致"的贴图误判为冲突。
-        /// </summary>
-        private static bool Matches(Texture2D master, Texture2D other, out string reason)
+        private static bool IsImportedAssetPath(string path)
         {
-            if (other == null)
+            return !string.IsNullOrEmpty(path) &&
+                (path.StartsWith("Assets/", StringComparison.Ordinal) ||
+                path.StartsWith("Packages/", StringComparison.Ordinal));
+        }
+
+        internal static bool ValidateTextures(IReadOnlyList<Texture2D> textures, out string reason)
+        {
+            if (textures.Count == 0 || textures.Count > SystemInfo.maxTextureArraySlices)
             {
-                reason = "为空";
+                reason = $"数组层数 {textures.Count} 无效，当前设备上限为 {SystemInfo.maxTextureArraySlices}。";
                 return false;
             }
 
-            if (other.width != master.width || other.height != master.height)
+            if (textures[0] == null)
             {
-                reason = $"尺寸不同（{other.width}x{other.height} 与 {master.width}x{master.height}）";
+                reason = "第 0 层为空或不是 Texture2D。";
                 return false;
             }
 
-            if (other.mipmapCount != master.mipmapCount)
+            Texture2D master = textures[0];
+            for (int i = 0; i < textures.Count; i++)
             {
-                reason = $"mip 层数不同（{other.mipmapCount} 与 {master.mipmapCount}）";
-                return false;
-            }
+                Texture2D texture = textures[i];
+                if (texture == null)
+                {
+                    reason = $"第 {i} 层为空或不是 Texture2D；启用数组的每个来源都必须指定二维贴图。";
+                    return false;
+                }
 
-            TextureImporter masterImporter = GetImporter(master);
-            TextureImporter otherImporter = GetImporter(other);
-            if (masterImporter == null || otherImporter == null)
-            {
-                reason = "读不到导入设置";
-                return false;
-            }
+                if (!IsImportedAssetPath(AssetDatabase.GetAssetPath(texture)))
+                {
+                    reason = $"第 {i} 层 {texture.name} 是内置或非资产贴图，无法作为数组的导入来源。" +
+                        "请停用该属性的数组化，或为每个来源指定 Assets / Packages 中的实际贴图。";
+                    return false;
+                }
 
-            if (masterImporter.textureCompression != otherImporter.textureCompression ||
-                masterImporter.crunchedCompression != otherImporter.crunchedCompression ||
-                masterImporter.sRGBTexture != otherImporter.sRGBTexture ||
-                masterImporter.alphaSource != otherImporter.alphaSource)
-            {
-                reason = "导入设置不同（压缩方式 / Crunch / sRGB / Alpha 来源）";
-                return false;
+                if (texture.width != master.width || texture.height != master.height ||
+                    texture.graphicsFormat != master.graphicsFormat || texture.mipmapCount != master.mipmapCount)
+                {
+                    reason = $"第 {i} 层 {texture.name} 为 {texture.width}×{texture.height} / " +
+                        $"{texture.graphicsFormat} / {texture.mipmapCount} mip；第 0 层为 " +
+                        $"{master.width}×{master.height} / {master.graphicsFormat} / {master.mipmapCount} mip。" +
+                        "请手动统一宽高、实际格式（含 sRGB）和 mip 层数。";
+                    return false;
+                }
+
+                if (!texture.isReadable)
+                {
+                    reason = $"{texture.name}：请手动开启 Read/Write；生成数组需要读取可保存的像素数据。";
+                    return false;
+                }
+
+                if (texture.format == TextureFormat.DXT1Crunched || texture.format == TextureFormat.DXT5Crunched ||
+                    texture.format == TextureFormat.ETC_RGB4Crunched || texture.format == TextureFormat.ETC2_RGBA8Crunched)
+                {
+                    reason = $"{texture.name}：纹理数组不能直接使用 Crunch 数据，请关闭 Crunch。";
+                    return false;
+                }
+
+                if (texture.filterMode != master.filterMode || texture.wrapModeU != master.wrapModeU ||
+                    texture.wrapModeV != master.wrapModeV || texture.anisoLevel != master.anisoLevel ||
+                    texture.mipMapBias != master.mipMapBias)
+                {
+                    reason = $"{texture.name}：采样设置与第 0 层不同；同一数组只能使用一组采样设置。";
+                    return false;
+                }
             }
 
             reason = string.Empty;
             return true;
-        }
-
-        private static TextureImporter GetImporter(Texture2D texture)
-        {
-            return (TextureImporter)AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(texture));
         }
     }
 }

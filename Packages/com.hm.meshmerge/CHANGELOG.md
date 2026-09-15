@@ -1,8 +1,25 @@
-# Changelog
+﻿# Changelog
 
 本包遵循语义化版本。
 
+## [Unreleased]
+
+- 排除由管线提供的 unity_ 内置属性，修复 unity_Lightmaps 重复声明；输出 Shader 已报错时停止绑定材质。
+- 按属性类型复制普通材质值，数组槽位只接收生成的 Texture2DArray，不再整体复制源材质的 2D 贴图绑定。
+
+- 修复内置贴图特殊 GUID 被登记为产物依赖而导致的导入断言与循环；数组来源限定为 Assets / Packages 中的贴图，内置或非资产来源给出明确提示。
+- 修复参数量化与错误属性去重：浮点 LUT 保留负数和超出 0–1 的数值，属性逐项列出。
+- 参数刷新保留旧行号和选择，只追加新项；Tiling/Offset 纳入参数表。
+- 保留网格顶点色及 UV0–UV7；输出 Mesh、Material 和浮点 LUT 更新时保持 GUID。
+- 纹理规格不同只报错，由用户手工统一；数组逐层写 CPU 像素数据以供保存，需 Read/Write，禁止 Crunch。
+- Shader 为各属性生成具体读取函数，普通材质属性继续绑定；显示、阴影与深度统一 Alpha 裁剪。
+- 修复窗口未应用编辑就合并、空输入校验异常，以及临时资源释放。
+- 同步当前说明与 URP 示例；旧 PNG 参数纹理保留，重新合并改绑浮点 .asset。
+- 本轮只进行静态检查，未执行 Unity 编译、导入或运行。
+
 ## [0.1.0] - 2026-09-15
+
+以下为初始开发记录，当前行为以 Unreleased 与 README 为准。
 
 - 建立包骨架：`com.hm.meshmerge`，包含 `HmMeshMerge`（Runtime）与 `HmMeshMergeEditor`（Editor）两个程序集定义。
 - Runtime：

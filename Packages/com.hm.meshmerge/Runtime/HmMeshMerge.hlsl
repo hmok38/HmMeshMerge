@@ -1,10 +1,10 @@
-#ifndef HM_MESH_MERGE_INCLUDED
+﻿#ifndef HM_MESH_MERGE_INCLUDED
 #define HM_MESH_MERGE_INCLUDED
 
 // HmMeshMerge 的来源索引判断片段。使用前请确保着色器已包含所在管线的核心头文件
 // （例如 URP 的 Core.hlsl），本文件依赖其中的实例化宏。
 //
-// 顶点上的来源索引与本次绘制的激活索引不一致时，把该顶点移出裁剪空间（w = 0），
+// 顶点上的来源索引与本次绘制的激活索引不一致时，把该顶点移出裁剪空间（例如 float4(2, 2, 2, 1)），
 // 整个三角形被裁剪，不进入光栅化。该判断必须加到每个 Pass 的顶点着色器，
 // 包括阴影和深度 Pass，否则隐藏的来源仍会投射阴影。
 //
@@ -16,17 +16,13 @@
 // 取值；行号由合并资产的参数表记录，生成着色器的文件头会逐个列出。这张纹理与普通材质
 // 属性一样由使用者的着色器自己声明，取值时把纹理传进函数即可。
 
-// 激活索引有两条来源，由宏选择：
+// 激活索引默认来自材质/实例属性 _MeshMergeIndex。
+// 生成模板在 Properties 中声明该属性，可在材质面板或 MaterialPropertyBlock 中调整。
+// 默认实例属性声明不在 UnityPerMaterial 中，不承诺 SRP Batcher 兼容；集成方按自己的绘制路径声明。
 //
-// 路径 B（默认）：索引编码在实例矩阵的 m33，配合 HmMeshMergeIndex.WriteToMatrix 使用，
-//   适用于自己提供实例矩阵的绘制路径（DrawMeshInstanced、RenderMeshInstanced 等），
-//   不引入材质属性，因此不影响 SRP Batcher 兼容性。
-//
-// 路径 A：定义 HM_MESH_MERGE_INDEX_FROM_MATRIX 之前不定义；索引来自材质属性或
-//   MaterialPropertyBlock（逐实例需要 #pragma multi_compile_instancing）。
-//   工具生成的专用着色器已在 Properties 块声明 _MeshMergeIndex("Mesh Merge Index", Float)，可在材质面板直接调整；
-//   自有着色器接入时按同样写法声明即可（由 MaterialPropertyBlock 提供时加 [PerRendererData]）。
-//   注意：该属性不在 UnityPerMaterial 中，会导致该着色器不参与 SRP Batcher 批处理。
+// 可选定义 HM_MESH_MERGE_INDEX_FROM_MATRIX，从 unity_ObjectToWorld._m33 读取。
+// 这会改变标准仿射矩阵（索引 0 时矩阵奇异），仅适合已控制变换、逆矩阵和剔除逻辑的自定义路径。
+// 不能把编码后的矩阵直接当作标准 TRS 用于任意 Unity 绘制 API。
 
 #if !defined(HM_MESH_MERGE_INDEX_FROM_MATRIX)
 UNITY_INSTANCING_BUFFER_START(HmMeshMergeProps)

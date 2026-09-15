@@ -1,176 +1,146 @@
-﻿using System.Collections.Generic;
-using System.IO;
+﻿using System;
+using System.Collections.Generic;
 using HmMeshMerge;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
+using Object = UnityEngine.Object;
 
 namespace HmMeshMergeEditor
 {
-    /// <summary>
-    /// 管理参数表并把各来源的参数写进查找纹理。
-    /// 纹理横轴是来源索引，纵轴是参数表的行；每行一个参数，行号一旦分配就保持稳定，
-    /// 使用者复制到自己着色器里的读取行号不会因为增删参数而失效。
-    /// </summary>
+    /// <summary>维护稳定参数行，并把启用的数值写入线性、无压缩的浮点查找纹理。</summary>
     internal static class HmMeshMergeParameterWriter
     {
-        /// <summary>参数纹理在着色器里的名字。</summary>
         public const string TEXTURE_NAME = "_HmMeshMergeParams";
-
-        /// <summary>纹理宽度上限；来源数量超过它就无法用索引列表示。</summary>
         public const int MAX_SOURCE_COUNT = 2048;
 
-        private static readonly Color32 EMPTY_PIXEL = new Color32(255, 255, 255, 255);
-
-        /// <summary>按参数表生成查找纹理：每行一个参数，横向为来源索引；空行填中性值。</summary>
-        public static Texture2D Build(List<HmMeshMergeSource> sources, IReadOnlyList<HmMeshMergeParameterEntry> table)
-        {
-            int width = Mathf.NextPowerOfTwo(sources.Count);
-            int height = Mathf.Max(1, CountRows(table));
-            var texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
-            var pixels = new Color32[width * height];
-            for (int i = 0; i < pixels.Length; i++)
-            {
-                pixels[i] = EMPTY_PIXEL;
-            }
-
-            foreach (HmMeshMergeParameterEntry entry in table)
-            {
-                // 贴图属性由纹理数组承载，这里只写数值参数。
-                if (!entry.active || IsTextureProperty(sources, entry.propertyName))
-                {
-                    continue;
-                }
-
-                for (int i = 0; i < sources.Count; i++)
-                {
-                    pixels[entry.row * width + i] = ReadValue(sources[i].material, entry.propertyName);
-                }
-            }
-
-            texture.SetPixels32(pixels);
-            texture.Apply();
-            return texture;
-        }
-
-        /// <summary>写入参数纹理并配置导入参数；返回导入后的纹理资产。</summary>
-        public static Texture2D Save(Texture2D texture, string assetName, string assetFolder)
-        {
-            string path = $"{assetFolder}/{assetName}_Params.png";
-            File.WriteAllBytes(path, texture.EncodeToPNG());
-            Object.DestroyImmediate(texture);
-            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
-
-            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
-            importer.textureType = TextureImporterType.Default;
-            importer.sRGBTexture = false;
-            importer.mipmapEnabled = false;
-            importer.wrapMode = TextureWrapMode.Clamp;
-            importer.filterMode = FilterMode.Point;
-            importer.npotScale = TextureImporterNPOTScale.None;
-            // 关键：查找纹理必须逐像素精确。ASTC 6x6 会让 6 个相邻来源共用一块而互相污染，
-            // 有损压缩也会改变裁剪阈值这类需要精确的数值；纹理很小，不压缩无负担。
-            importer.textureCompression = TextureImporterCompression.Uncompressed;
-            importer.SaveAndReimport();
-            return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-        }
-
-        /// <summary>
-        /// 首次填表：按源材质的差异生成参数表——各源取值不同的属性排在前并启用，取值相同的排在后且不启用。
-        /// 源材质缺少的属性不列入（合并时会另行报错）。只有取值不同的属性才需要按来源区分。
-        /// </summary>
+        /// <summary>首次按差异排序；不把数值恰好相同的不同属性当作别名。</summary>
         public static List<HmMeshMergeParameterEntry> BuildInitialTable(IReadOnlyList<HmMeshMergeSource> sources)
         {
+            var differing = new List<string>();
+            var identical = new List<string>();
             var table = new List<HmMeshMergeParameterEntry>();
-            if (sources.Count == 0 || sources[0].material == null)
+            if (sources.Count == 0 || sources[0] == null || sources[0].material == null)
             {
                 return table;
             }
 
             Shader shader = sources[0].material.shader;
+            if (shader == null)
+            {
+                return table;
+            }
 
-            // 先收集可直接比较的属性，并跳过"与已收录项取值完全相同"的别名
-            // （URP Lit 同时声明 _BaseMap/_MainTex、_BaseColor/_Color，指向同一份数据）。
-            var candidates = new List<string>();
-            var types = new Dictionary<string, ShaderPropertyType>();
             for (int i = 0; i < shader.GetPropertyCount(); i++)
             {
-                string propertyName = shader.GetPropertyName(i);
-                if (!HasPropertyOnAll(sources, propertyName))
+                string name = shader.GetPropertyName(i);
+                if (IsEngineProperty(name))
                 {
                     continue;
                 }
 
-                ShaderPropertyType type = shader.GetPropertyType(i);
-                if (IsAliasOfAccepted(sources, propertyName, candidates, types))
+                if (HasPropertyOnAll(sources, name))
                 {
-                    continue;
+                    (SourcesDiffer(sources, name) ? differing : identical).Add(name);
                 }
 
-                candidates.Add(propertyName);
-                types[propertyName] = type;
+                if (shader.GetPropertyType(i) == ShaderPropertyType.Texture &&
+                    shader.GetPropertyTextureDimension(i) == TextureDimension.Tex2D &&
+                    shader.FindPropertyIndex(name + "_ST") < 0 && HasPropertyOnAll(sources, name + "_ST"))
+                {
+                    string transformName = name + "_ST";
+                    (SourcesDiffer(sources, transformName) ? differing : identical).Add(transformName);
+                }
             }
 
-            var differing = new List<string>();
-            var identical = new List<string>();
-            foreach (string propertyName in candidates)
+            foreach (string name in differing)
             {
-                if (SourcesDiffer(sources, propertyName, types[propertyName]))
-                {
-                    differing.Add(propertyName);
-                }
-                else
-                {
-                    identical.Add(propertyName);
-                }
+                table.Add(new HmMeshMergeParameterEntry { propertyName = name, row = table.Count, active = true });
             }
 
-            AppendRows(table, differing, true);
-            AppendRows(table, identical, false);
+            foreach (string name in identical)
+            {
+                table.Add(new HmMeshMergeParameterEntry { propertyName = name, row = table.Count, active = false });
+            }
+
             return table;
         }
 
-        /// <summary>该属性是否与已收录的某个属性取值完全相同（贴图比引用，数值比读出的值）。</summary>
-        private static bool IsAliasOfAccepted(IReadOnlyList<HmMeshMergeSource> sources, string candidate,
-            List<string> accepted, Dictionary<string, ShaderPropertyType> types)
+        /// <summary>保留已有行号和选择，只在末尾追加新属性；失效项停用但保留行。</summary>
+        public static List<HmMeshMergeParameterEntry> RefreshTable(IReadOnlyList<HmMeshMergeSource> sources,
+            IReadOnlyList<HmMeshMergeParameterEntry> previous)
         {
-            foreach (string name in accepted)
+            var table = new List<HmMeshMergeParameterEntry>();
+            var names = new HashSet<string>();
+            int nextRow = 0;
+            foreach (HmMeshMergeParameterEntry old in previous)
             {
-                bool same = true;
-                foreach (HmMeshMergeSource source in sources)
+                HmMeshMergeParameterEntry entry = old;
+                if (!HasPropertyOnAll(sources, entry.propertyName))
                 {
-                    Material material = source.material;
-                    same = types[name] == ShaderPropertyType.Texture
-                        ? material.GetTexture(candidate) == material.GetTexture(name)
-                        : ReadValue(material, candidate).Equals(ReadValue(material, name));
-                    if (!same)
-                    {
-                        break;
-                    }
+                    entry.active = false;
                 }
 
-                if (same)
-                {
-                    return true;
-                }
+                table.Add(entry);
+                names.Add(entry.propertyName);
+                nextRow = Mathf.Max(nextRow, entry.row + 1);
             }
 
-            return false;
-        }
-
-        private static void AppendRows(List<HmMeshMergeParameterEntry> table, List<string> names, bool active)
-        {
-            foreach (string name in names)
+            foreach (HmMeshMergeParameterEntry candidate in BuildInitialTable(sources))
             {
-                table.Add(new HmMeshMergeParameterEntry { propertyName = name, row = table.Count, active = active });
+                if (!names.Add(candidate.propertyName))
+                {
+                    continue;
+                }
+
+                HmMeshMergeParameterEntry entry = candidate;
+                entry.row = nextRow++;
+                table.Add(entry);
             }
+
+            return table;
         }
 
-        private static bool HasPropertyOnAll(IReadOnlyList<HmMeshMergeSource> sources, string propertyName)
+        internal static bool IsEngineProperty(string name)
         {
+            return name != null && name.StartsWith("unity_", StringComparison.Ordinal);
+        }
+
+        public static bool TryGetType(Shader shader, string name, out ShaderPropertyType type)
+        {
+            type = ShaderPropertyType.Vector;
+            if (shader == null || string.IsNullOrEmpty(name) || IsEngineProperty(name))
+            {
+                return false;
+            }
+
+            int index = shader.FindPropertyIndex(name);
+            if (index >= 0)
+            {
+                type = shader.GetPropertyType(index);
+                return true;
+            }
+
+            if (!name.EndsWith("_ST", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            index = shader.FindPropertyIndex(name.Substring(0, name.Length - 3));
+            return index >= 0 && shader.GetPropertyType(index) == ShaderPropertyType.Texture &&
+                shader.GetPropertyTextureDimension(index) == TextureDimension.Tex2D;
+        }
+
+        private static bool HasPropertyOnAll(IReadOnlyList<HmMeshMergeSource> sources, string name)
+        {
+            if (sources.Count == 0)
+            {
+                return false;
+            }
+
             foreach (HmMeshMergeSource source in sources)
             {
-                if (source.material == null || !source.material.HasProperty(propertyName))
+                if (source == null || source.material == null || !TryGetType(source.material.shader, name, out _))
                 {
                     return false;
                 }
@@ -179,27 +149,17 @@ namespace HmMeshMergeEditor
             return true;
         }
 
-        /// <summary>各源在该属性上取值是否不同；贴图比较引用，数值按类型读取后比较。</summary>
-        private static bool SourcesDiffer(IReadOnlyList<HmMeshMergeSource> sources, string propertyName, ShaderPropertyType type)
+        public static bool SourcesDiffer(IReadOnlyList<HmMeshMergeSource> sources, string name)
         {
-            if (type == ShaderPropertyType.Texture)
-            {
-                Texture firstTexture = sources[0].material.GetTexture(propertyName);
-                for (int i = 1; i < sources.Count; i++)
-                {
-                    if (sources[i].material.GetTexture(propertyName) != firstTexture)
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-
-            Color32 first = ReadValue(sources[0].material, propertyName);
+            TryGetType(sources[0].material.shader, name, out ShaderPropertyType type);
+            Material first = sources[0].material;
             for (int i = 1; i < sources.Count; i++)
             {
-                if (!ReadValue(sources[i].material, propertyName).Equals(first))
+                Material other = sources[i].material;
+                bool same = type == ShaderPropertyType.Texture
+                    ? first.GetTexture(name) == other.GetTexture(name)
+                    : ReadValue(first, name).Equals(ReadValue(other, name));
+                if (!same)
                 {
                     return true;
                 }
@@ -208,59 +168,168 @@ namespace HmMeshMergeEditor
             return false;
         }
 
-        /// <summary>贴图属性由纹理数组承载，不进数值参数纹理。</summary>
-        private static bool IsTextureProperty(List<HmMeshMergeSource> sources, string propertyName)
+        /// <summary>按原始精度读取；颜色保持材质 API 的值，写 LUT 时再做颜色空间转换。</summary>
+        public static Vector4 ReadValue(Material material, string name)
         {
-            if (sources.Count == 0 || sources[0].material == null)
+            if (!TryGetType(material.shader, name, out ShaderPropertyType type))
             {
-                return false;
+                throw new ArgumentException($"材质 {material.name} 不存在参数 {name}。");
             }
 
-            Shader shader = sources[0].material.shader;
-            int index = shader.FindPropertyIndex(propertyName);
-            return index >= 0 && shader.GetPropertyType(index) == ShaderPropertyType.Texture;
-        }
-
-        /// <summary>按源材质的属性类型取值；属性不存在时返回中性值。</summary>
-        public static Color32 ReadValue(Material material, string propertyName)
-        {
-            if (!material.HasProperty(propertyName))
+            if (material.shader.FindPropertyIndex(name) < 0)
             {
-                return EMPTY_PIXEL;
+                string textureName = name.Substring(0, name.Length - 3);
+                Vector2 scale = material.GetTextureScale(textureName);
+                Vector2 offset = material.GetTextureOffset(textureName);
+                return new Vector4(scale.x, scale.y, offset.x, offset.y);
             }
 
-            int index = material.shader.FindPropertyIndex(propertyName);
-            ShaderPropertyType type = index < 0 ? ShaderPropertyType.Float : material.shader.GetPropertyType(index);
             switch (type)
             {
                 case ShaderPropertyType.Color:
-                    Color color = material.GetColor(propertyName);
-                    return new Color32(ToByte(color.r), ToByte(color.g), ToByte(color.b), ToByte(color.a));
+                    return material.GetColor(name);
                 case ShaderPropertyType.Vector:
-                    Vector4 vector = material.GetVector(propertyName);
-                    return new Color32(ToByte(vector.x), ToByte(vector.y), ToByte(vector.z), ToByte(vector.w));
+                    return material.GetVector(name);
+                case ShaderPropertyType.Int:
+                    return new Vector4(material.GetInteger(name), 0f, 0f, 0f);
+                case ShaderPropertyType.Float:
+                case ShaderPropertyType.Range:
+                    return new Vector4(material.GetFloat(name), 0f, 0f, 0f);
                 default:
-                    return new Color32(ToByte(material.GetFloat(propertyName)), 0, 0, 0);
+                    throw new ArgumentException($"{name} 是纹理，不能作为数值读取。");
             }
         }
 
-        private static int CountRows(IReadOnlyList<HmMeshMergeParameterEntry> table)
+        public static void Validate(IReadOnlyList<HmMeshMergeSource> sources,
+            IReadOnlyList<HmMeshMergeParameterEntry> table, List<string> errors)
         {
-            int rows = 0;
+            var rows = new HashSet<int>();
+            var names = new HashSet<string>();
+            int limit = Mathf.Min(MAX_SOURCE_COUNT, SystemInfo.maxTextureSize);
             foreach (HmMeshMergeParameterEntry entry in table)
             {
-                if (entry.row >= rows)
+                if (entry.row < 0 || entry.row >= limit || !rows.Add(entry.row))
                 {
-                    rows = entry.row + 1;
+                    errors.Add($"参数 {entry.propertyName} 的行号 {entry.row} 无效、重复或超过上限 {limit - 1}。");
+                }
+
+                if (!entry.active)
+                {
+                    continue;
+                }
+
+                if (!names.Add(entry.propertyName) || !HasPropertyOnAll(sources, entry.propertyName))
+                {
+                    errors.Add($"启用参数 {entry.propertyName} 重复，或源材质中不存在；请刷新参数表。");
+                    continue;
+                }
+
+                TryGetType(sources[0].material.shader, entry.propertyName, out ShaderPropertyType type);
+                if (type == ShaderPropertyType.Texture)
+                {
+                    continue;
+                }
+
+                foreach (HmMeshMergeSource source in sources)
+                {
+                    Vector4 value = ReadValue(source.material, entry.propertyName);
+                    for (int component = 0; component < 4; component++)
+                    {
+                        if (float.IsNaN(value[component]) || float.IsInfinity(value[component]))
+                        {
+                            errors.Add($"{source.material.name}：{entry.propertyName} 含非有限数值。");
+                            break;
+                        }
+                    }
+
+                    if (type == ShaderPropertyType.Int &&
+                        (double)source.material.GetInteger(entry.propertyName) != value.x)
+                    {
+                        errors.Add($"{source.material.name}：整数 {entry.propertyName} 无法用浮点 LUT 精确表示。");
+                    }
+                }
+            }
+        }
+
+        /// <summary>无启用数值时返回 null；保留全部已分配行的高度，空行写零。</summary>
+        public static Texture2D Build(IReadOnlyList<HmMeshMergeSource> sources,
+            IReadOnlyList<HmMeshMergeParameterEntry> table)
+        {
+            int height = 0;
+            bool hasValues = false;
+            Shader shader = sources[0].material.shader;
+            foreach (HmMeshMergeParameterEntry entry in table)
+            {
+                height = Mathf.Max(height, entry.row + 1);
+                hasValues |= entry.active && TryGetType(shader, entry.propertyName, out ShaderPropertyType type) &&
+                    type != ShaderPropertyType.Texture;
+            }
+
+            if (!hasValues)
+            {
+                return null;
+            }
+
+            int width = sources.Count;
+            var pixels = new Color[width * height];
+            foreach (HmMeshMergeParameterEntry entry in table)
+            {
+                if (!entry.active || !TryGetType(shader, entry.propertyName, out ShaderPropertyType type) ||
+                    type == ShaderPropertyType.Texture)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < sources.Count; i++)
+                {
+                    Color value = ReadValue(sources[i].material, entry.propertyName);
+                    if (type == ShaderPropertyType.Color && QualitySettings.activeColorSpace == ColorSpace.Linear)
+                    {
+                        value = value.linear;
+                    }
+
+                    pixels[entry.row * width + i] = value;
                 }
             }
 
-            return rows;
+            var texture = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true)
+            {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            try
+            {
+                texture.SetPixels(pixels);
+                texture.Apply(false, false);
+                return texture;
+            }
+            catch
+            {
+                Object.DestroyImmediate(texture);
+                throw;
+            }
         }
 
-        private static byte ToByte(float value)
+        /// <summary>保存浮点原生资产并保持既有 GUID；调用方负责释放尚未移交给资产库的临时纹理。</summary>
+        public static Texture2D Save(Texture2D texture, string assetName, string assetFolder)
         {
-            return (byte)(Mathf.Clamp01(value) * 255f);
+            if (texture == null)
+            {
+                return null;
+            }
+
+            string path = $"{assetFolder}/{assetName}_Params.asset";
+            texture.name = assetName + "_Params";
+            Texture2D existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (existing == null)
+            {
+                AssetDatabase.CreateAsset(texture, path);
+                return texture;
+            }
+
+            EditorUtility.CopySerialized(texture, existing);
+            EditorUtility.SetDirty(existing);
+            return existing;
         }
     }
 }

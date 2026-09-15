@@ -1,168 +1,77 @@
-# HmMeshMerge 插件设计文档
+﻿# HmMeshMerge 设计说明
 
-> 本文档整理自在 HmSlgGame 项目中的方案讨论，用于在新 Unity 项目中创建 HmMeshMerge UPM 包。
-> 在新项目会话中请先完整读取本文档，再按《Unity系统设计与编码规范》（用户级）、公司级 `CodeStyleGuide` / `CodeStructureGuide` 实施。
-> 文档中的“已确认决策”是用户明确拍板的，不要自行改动；带“建议”字样的可在实施时复核调整。
+当前契约以用户需求定稿及本次确认的“尺寸不一致只报错，用户手工统一”为准。旧图集、flipbook、顶点外观参数和默认顶点色方案已作废。
 
-## 1. 插件目标与边界
+## 主链与职责
 
-**目标**：把 N 个共享同一 shader 的模型合并成 1 个 Mesh + 1 个材质。每个顶点带“来源索引”，绘制时按索引只显示其中一个来源。用于把“多品种、每品种少量实例”的绘制合批，降低 draw call。
+入口 HmMeshMergeWindow.Execute 先把 SerializedObject 的编辑应用到配置，再调用 HmMeshMergeBuilder.Build。
 
-**边界**：
-
-- 做：合并（几何 + 外观 + 索引属性）、配套 shader 片段、索引传递的运行时辅助、合并结果的描述资产。
-- 不做：不提供渲染器、不做批次管理/剔除/实例化绘制、不绑定 GPUInstance / SRP Batcher / 任何具体合批技术、不做动画烘焙（但索引属性可供使用者自己的动画数据选择使用）。
-- 不假设宿主项目的资源系统、渲染管线或目录结构。
-
-## 2. 已确认决策（用户拍板）
-
-| 项 | 决策 |
+| 类型 | 职责及调用关系 |
 |---|---|
-| 分发形态 | UPM Package，在新 Unity 项目中创建 |
-| 包名 | `com.hm.meshmerge` |
-| 程序集 / 命名空间 | Runtime：`HmMeshMerge`；Editor：`HmMeshMergeEditor`（单层 PascalCase，与程序集同名） |
-| 贴图规格 | **统一尺寸与格式，作为约束要求遵守**：纹理数组要求各层同尺寸、同格式、同 mip 层数，导入时校验并报出不符项，不静默缩放 |
-| 索引通道 | **默认顶点色**（COLOR），并提供其他通道选择 |
-| 来源参数载体 | **材质数组**：合并网格只写索引，各来源的颜色与阈值以数组写在材质上（2026-09-15 调整，取代早期的顶点外观通道方案） |
-| 输出着色器 | **工具生成的专用无光照着色器**：不改写源着色器 |
+| HmMeshMergeAsset | 配置和导出结果的唯一载体，运行时按只读配置使用 |
+| HmMeshMergeSource / ParameterEntry / Channel | 来源、稳定行、索引通道的数据契约 |
+| HmMeshMergeWindow | 新建/选择配置、序列化编辑、显式重排确认、显示消息并同步 Console |
+| HmMeshMergeBuilder | 校验 → 生成数组 → 合并几何 → 生成 LUT → 生成/选择 Shader → 绑定并保存输出 |
+| HmMeshMergeParameterWriter | 读取和比较原始值、刷新稳定参数表、生成及保存浮点 LUT |
+| HmMeshMergeTextureArrayImporter | 根据源贴图导入产物生成每层像素都有 CPU 数据的 Texture2DArray |
+| HmMeshMergeTextureSet | 生成阶段的属性名和数组引用 |
+| HmMeshMergeShaderWriter | 逐属性读取函数、URP 无光照展示及三个 Pass |
+| HmMeshMerge.hlsl / HmMeshMergeIndex | 来源索引判断、LUT 读取；自定义路径的可选矩阵索引接口 |
 
-## 3. 数据契约
+Runtime 编入 HmMeshMerge，不引用 UnityEditor。Editor 编入仅 Editor 平台的 HmMeshMergeEditor，只依赖 Runtime。没有新增程序集或辅助框架。
 
-这是插件与使用者之间唯一的固定约定。通道可配置，但“生成侧写入的通道”与“渲染侧 shader 读取的通道”必须一致（顶点属性是编译期绑定的）。
+## 网格
 
-| 载体 | 内容 | 写入方 |
-|---|---|---|
-| TEXCOORD0 | UV（原样保留：贴图走纹理数组，不重映射） | 合并工具 |
-| 索引通道 | 来源索引，0..N-1 整数 | 合并工具 |
-| 材质 `_<贴图属性>` | 每个贴图属性一个纹理数组，层号即来源索引 | 合并工具 |
-| 材质 `_HmMeshMergeParams` | 数值参数的查找纹理：横轴为来源索引、纵轴为参数表的行（行号规则见 5.1） | 合并工具 |
-| 激活索引 | 每次绘制要显示哪一个来源 | 集成层 |
+- 保持各源的局部坐标，把三角形索引加顶点偏移后拼接成一个子网格；不会复制源对象的 Transform。
+- 默认在空闲 UV3 的 x 分量写整数来源索引；可选 UV1–UV7 或顶点色。顶点色索引为 byte，Shader 解码 round(r * 255)，最多 256 个来源。
+- 保留已有法线、切线、颜色及全部 UV 的值。UV 采用来源中的最大维度；缺少属性的来源补零，颜色补白。不是顶点缓冲区逐字节复制，不承诺原始属性格式和顶点 ID 不变。
+- 选中索引通道被任意来源占用即报错。蒙皮、BlendShape 与非三角形拓扑报错，避免静默丢失数据。多子网格使用该来源指定的同一材质。
+- 超过 65535 顶点时用 UInt32；目标平台能否绘制由人工验证。
+- 所有三角形的顶点来自同一来源；三个 Pass 都按来源隐藏，使用确定在裁剪空间外的位置。
 
-**为什么用纹理数组而不是图集**（2026-09-15 调整）：图集的边长按 `⌈√N⌉ × 贴图尺寸` 增长，2048 的贴图在 4096 上限内只能放 1 个（实测：256→225 个、512→49 个、1024→9 个、2048→1 个），对"贴图较大"的资源没有可行空间；而且 tile 间 8 像素 padding 在 mip 第 4 级以后不足 1 个纹素，远处物体会串到相邻来源的颜色。纹理数组的层号直接就是来源索引（UV 不动）、每层 mip 独立、且保留平台压缩，内存也不比图集差。
+## 参数表与 LUT
 
-**数组怎么生成**：每个贴图属性对应一份 `.hmtexarray` 源文件（内容为空，导入设置存在它的 `.meta` 里），由 `HmMeshMergeTextureArrayImporter` 负责导入——它把引用的各源贴图按顺序装进各层（`Graphics.CopyTexture`），数组的尺寸与格式跟随源贴图。导入器对每张源贴图声明 `AssetImportContext.DependsOnArtifact`，切换 Build Target 时源贴图先按新平台重导、数组随之重导，于是 Android 得到 ASTC、桌面得到 BC。**这条依赖是必须的**：只声明 `DependsOnSourceAsset` 不会随平台重导，数组会停留在旧格式。
+首次列出 Shader 声明的材质属性（排除由管线管理的 unity_ 内置属性），不按相同值删除“别名”。可比较差异的属性排前并启用，相同项排后停用。二维贴图的 Tiling/Offset 作为属性名加 _ST 的向量候选参与比较，网格 UV 不烘焙 ST。
 
-容量上只受 `SystemInfo.maxTextureArraySlices`（层数，D3D11/Metal 通常 2048、GLES3 保底 256）与单层尺寸上限约束，**没有"层数 × 尺寸"的乘法上限**。已知雷区：`QualitySettings` 的 Texture Quality 不是 Full 时，数组导入可能失败或产出空数组（Unity bug 1393786）；数组资产没有 TextureImporter，平台逻辑全部在导入器里。
+刷新保留已分配的属性、行号和开关，新增项只追加；消失的属性停用但保留行。刷新不会自动改变已有的用户选择。只有显式重排才删除停用行并重新编号，窗口先提示影响。行号无效、重复、越界，启用项重复或不存在，合并都会报错。
 
-**索引通道（默认顶点色）**
+数值采用 RGBAFloat 原生 .asset，线性、Point、Clamp、无 mip、无压缩。宽度是来源数，高度覆盖所有已分配行，停用行填零。无启用数值则不生成 LUT，也不绑定旧 LUT。Color 在 Linear 项目中转成线性值；Vector、Float、Range 保留原始数值；Integer 不能被 float 精确表示时报错。
 
-- 顶点色为 8 位/通道，用其中一个分量存索引：写入 `(index)/255`，shader 侧解码 `round(color.r * 255.0)`。
-- 因此默认通道下子树数量上限为 256。
-- 可选改为任意空闲 UV 通道：存储为 float，精度不受 256 限制，解码 `round(uv.x)`。
-- 风险提示：顶点色是 8 位量化数据，若在目标项目实测发现数值不稳定（色彩空间/平台差异），切换为 UV 通道即可，工具支持。
+读取函数 HmMeshMergeLoadParam(texture, sourceIndex, row) 使用整数坐标 Load。启用的数值访问器读取实际行，其他访问器返回普通材质属性；停用项明确使用第一来源的值。
 
-**来源参数（数值）**
+## 纹理数组
 
-- 合并网格不再携带外观通道：各来源的颜色、阈值等数值参数按属性名从源材质读出，写成查找纹理
-  `_HmMeshMergeParams`——横轴为来源索引、纵轴为参数表的行；渲染侧用 `Load` 按行号取值。哪些属性
-  需要按来源区分由参数表决定，不再是固定的顶点通道。
-- 属性名来自合并资产的参数表。首次合并时按各源材质的差异自动填表：取值不同的属性排在前并启用，
-  取值相同的排在后且不启用；指向同一份数据的别名属性只保留一个。这是"插件能读取其他参数吗"的
-  写入侧答案——能，按参数表列出的属性名从源材质读取。
+只有启用且引用不同的二维贴图属性生成数组。不同属性分别绑定，不能因当前引用相同就抹去一个属性。引用相同的纹理保持原始维度和原始材质引用。
 
-**渲染侧读取**：`HmMeshMerge.hlsl` 提供 `HmMeshMergeLoadParam(纹理, sourceIndex, 行号)`——纹理按参数传入，
-片段本身不声明材质属性，因此不跟使用者的着色器争同一张纹理的声明。生成的着色器与参考着色器都直接用
-这一行取值；行号由合并资产的参数表记录，生成着色器的文件头会逐个列出。
+.hmtexarray 源文件为空，贴图引用按顺序存在其 .meta 导入设置中。Importer 对有效来源先声明 DependsOnArtifact，随后校验和生成；错误时也保留已知依赖，便于源贴图修复后再次导入。
 
-## 4. 生成侧设计（Editor）
+校验实际宽高、graphicsFormat（包含 sRGB）、mip 层数和采样设置；不以压缩设置名称替代实际格式。尺寸不一致只报错，不修改源贴图。来源需手动开启 Read/Write，Crunch 需关闭。数组按实际 TextureFormat、mip 数与线性标识创建；发生格式回退即报错。逐层逐 mip 的 GetPixelData / SetPixelData 写入 CPU 数据后 Apply，避免只复制 GPU 内容却缺少可保存像素。
 
-**输入**：N 组（Mesh + Material），每组一个显示名。
+源贴图和输出数组保留 CPU 数据以满足导入与保存，需要计入内存开销。切换目标平台后的格式由实际源导入产物决定；未出包验证前不声称 Android 一定是 ASTC。
 
-**流程**（入口平铺调用，细节进私有方法）：
+API 依据：[SetPixelData](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/Texture2DArray.SetPixelData.html)、[Texture2DArray 构造器](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/Texture2DArray-ctor.html)。
 
-1. 校验：所有源共享同一 shader；各贴图属性在源上尺寸一致、层数在设备上限内；目标顶点通道空闲；网格形态与顶点数在索引格式允许范围内。
-2. 合并几何：顶点拼接、索引重映射、写入来源索引。**不做位置偏移，也不重映射 UV**——数组的层号就是来源索引，UV 原样保留（tiling 可用，也不要求 UV 落在 [0,1]）。
-3. 生成贴图数组：每个贴图属性写出一份 `.hmtexarray` 源文件，把各源贴图按顺序写进导入器，由导入器装成纹理数组。
-4. 生成资产：合并 Mesh、纹理数组、参数查找纹理、材质，写回同一份配置资产。
+## Shader 与集成边界
 
-**输出资产**：
+生成器不改源 Shader。每个普通材质属性都有 Properties / 声明 / 具体读取函数；unity_ 内置属性交给管线声明和绑定。二维贴图函数应用自己的 ST。主贴图与主颜色按 Shader 标记或常见名称作展示，绝不把第一个数值行当作颜色。Forward、ShadowCaster、DepthOnly 统一 Alpha 裁剪，阴影覆盖方向光和点/聚光灯路径。
 
-- 合并 Mesh（`IndexFormat.UInt16` 优先，超限用 UInt32 并提示）
-- 纹理数组资产（每个贴图属性一份，由 `.hmtexarray` 导入器生成，随平台重导）
-- 参数查找纹理（数值参数，强制不压缩）
-- 材质（绑定各纹理数组与查找纹理）
-- `HmMeshMergeAsset`（ScriptableObject）：配置（源列表、参数表、索引通道、输出 Shader）与结果（合并 Mesh、材质）都在其中。
+默认激活索引来自 _MeshMergeIndex 材质/实例属性。模板基于 URP，不承诺 SRP Batcher 兼容；其他管线要移植对应宏和 Pass。专用 Shader 由使用者复制并接入自己的算法，而非任意 Shader 效果的转换器。
 
-**类草案**（实施时按规范复核，不制造碎片、不做未确认的扩展）：
+m33 编码作为已存在的公开接口保留，仅用于完全受控的自定义绘制：编码后不再是标准仿射矩阵，索引 0 时矩阵奇异，逆矩阵与剔除不能继续依赖普通 TRS 假设。普通验证使用材质属性路径。
 
-- `HmMeshMergeWindow`（EditorWindow）：选择源、配置通道与图集、执行、查看结果。只做交互，不承载算法。
-- `HmMeshMergeBuilder`：合并主体。几何合并、索引写入、图集打包、资产写入按步骤在入口平铺调用；细节进私有方法。
-- `HmMeshMergeSource`：一个源项（Mesh、Material、显示名）的数据类型。
-- `HmMeshMergeAsset`：见上。
+不提供渲染器、批次管理、实例剔除、动画烘焙或 HmSlgGame 接入。减少 draw call 仍需调用方把同 Mesh、同 Material 的实例实际组织到同一批次。
 
-## 5. 运行侧设计（Runtime）
+## 资产、失败与迁移
 
-**核心逻辑**（顶点着色器）：
+- 输出位于配置资产目录。Mesh、Material、浮点 LUT 原地 CopySerialized，保持 GUID；Shader 名含配置 GUID，避免不同目录同名配置的 Shader 名碰撞。
+- 普通数组路径沿用旧命名；仅属性文件名冲突时增加标识。源 Shader 的插件保留名冲突在生成前报错。
+- 自定义输出 Shader 的数组维度与 LUT 属性必须满足契约，否则报错。输出 Shader 已有编译错误时，停止创建材质。普通参数按类型逐项复制，转换为数组的槽位跳过源 2D 贴图绑定，只接收生成数组。
+- Builder 对非持久化的临时 Mesh、Texture、Material 使用 finally 释放；Importer 失败也释放临时数组。
+- 配置结果引用在生成完成后发布，但资产导出不是文件事务；I/O 或导入中途失败可能留下部分新文件或已更新文件。修复原因后重新合并。
+- 旧 _Params.png 和历史图集、Shader 副本不自动删除。重新合并绑定新的浮点 LUT；旧生成资产不会因改源码自动更新。
 
-```hlsl
-if (abs(sourceIndex - activeIndex) > 0.5)
-{
-    output.positionCS = float4(0, 0, 0, 0);   // w=0，整个三角形被裁剪，不进光栅化
-    return output;
-}
-```
+## 人工验证
 
-合并时保证一个三角形的三个顶点属于同一来源，因此顶点级判断等价于三角形级判断。
+检查来源索引切换、不同/相同参数、负数和大于 1 的数值、HDR 颜色、ST、UV/颜色动画数据、阴影和深度裁剪；再次合并后检查场景/Prefab 中的 Mesh 与 Material 引用；关闭重开编辑器后检查数组像素，以及目标平台包内格式。
 
-**激活索引的两条传递路径**（由使用者的渲染路径选择，shader 用宏切换）：
-
-- 路径 A（标准）：`UNITY_DEFINE_INSTANCED_PROP(float, _MeshMergeIndex)` + `UNITY_ACCESS_INSTANCED_PROP`。普通 MeshRenderer 走材质/MPB 设值（per-draw），`DrawMeshInstanced` 走 MPB 数组（逐实例），同一份 shader 代码覆盖两种场景。
-- 路径 B（矩阵分量）：把索引写进实例矩阵的 `m33`（标准 TRS 下恒为 1，可安全占用），适用于任何只传 `Matrix4x4` 的绘制路径。代价：shader 必须手写位置变换 `mul((float3x3)unity_ObjectToWorld, positionOS) + unity_ObjectToWorld._m03_m13_m23`，不能用 `TransformObjectToWorld`（w 分量会被索引污染）。
-
-**Runtime 类草案**：
-
-- `HmMeshMergeAsset`（ScriptableObject，见上）
-- `HmMeshMergeIndex`（静态类）：矩阵分量的写入/读取辅助，保证编码解码与 shader 一致。
-- `HmMeshMerge.hlsl`：索引读取 + 隐藏判断 + 来源参数读取（`HmMeshMergeLoadParam`）的 shader 片段，供参考 shader include，也供使用者拷进自己的 shader。
-- 一个参考 shader：以 URP 为目标（宿主项目用 URP），展示如何接入索引判断与纹理数组 + 参数查找纹理。其他管线由使用者自行移植片段。
-
-目标管线若与实际项目不同，参考 shader 需要替换，但 hlsl 片段与数据契约保持不变。
-
-## 5.1 专用着色器生成（Editor）
-
-**2026-09-15 调整**：早期方案是"复制源着色器并包装它的顶点函数"，实践中有两个硬限制——只能改函数边界、改不了片元内部（源参数在片元里被使用，无法按来源替换）；顶点输入结构体缺通道时还要连带复制声明文件，对 URP 这类"薄壳 + include"的着色器并不通用。现改为**不改写源着色器**：
-
-- 未显式指定「输出 Shader」时，工具生成一份专用着色器并**回填到资产的「输出 Shader」字段**；指向别的 Shader 时直接用它，指向生成件或为空时重新生成（同路径覆盖，不产生多余文件）。着色器只做无光照展示：采样图集，并取参数表第一个启用行乘到颜色上以确认参数接对；**不含任何属性的特定用法**——颜色、裁剪等一律由使用者在自有着色器里按参数表实现，插件不假设哪些属性是"特殊"的。
-- 各来源的参数写进查找纹理 `_HmMeshMergeParams`，着色器用 `Load` 按索引取值——容量不受常量缓冲区限制（上限由纹理宽度决定，当前 2048）。
-- **参数表与行号稳定性**：合并资产记录"属性名 → 行号"。勾选的参数按行写入；移除的参数只把该行置为空（active = false），后续参数的行号不前移，只有显式"重新整理参数表"才会重排。这是必需的：使用者会把行号写进自有着色器的 `Load` 调用，行号漂移会让已有代码静默读错。
-- 参数纹理强制不压缩：ASTC 分块会让相邻来源互相污染，有损压缩也会改变裁剪阈值这类精确值。
-- 生成的着色器同时作为接入模板：文件头列出每个来源索引对应的网格与材质、每个参数所在的行，以及可直接复制的 `HmMeshMergeLoadParam` 取值行。
-- **配置的唯一来源是合并资产**：源列表、参数表、索引通道、属性名与输出 Shader 都存在 `HmMeshMergeAsset` 里，窗口只编辑它、不另存一份设置（早期版本把设置存在窗口字段里并在合并时复制进资产，会造成两份数据漂移）。窗口未绑定资产时只显示"新建 / 选择"，新建即创建资产并自动引用。改完网格或材质后，把同一资产选回窗口即可重新合并。
-- ForwardLit / ShadowCaster / DepthOnly 三个 Pass 使用同一套判断。
-
-代价是**不还原源着色器的光照效果**，只保证颜色与裁剪语义一致。需要完整光照时，使用者可让自有着色器接入索引判断，参考 `Samples~/UrpCutout`。
-
-## 6. 校验规则与约束
-
-- 所有源共享同一 shader（不同 shader 的模型不能合并）。
-- 源 UV 必须在 [0,1]；有 tiling/wrap 的模型报错，不静默修改。材质自身的 ST 会烘焙进 UV 后参与重映射。
-- 图集 tile 尺寸必须统一，不一致时报错。
-- 索引通道与外观通道不得相同；通道被源数据占用时报错。
-- 顶点色作索引通道时子树数 ≤ 256。
-- 外观参数固定为 4 分量（tint.rgb + cutoff），通道需要可容纳 4 分量。
-- 改外观参数需要重新执行合并；工具应支持从既有 `HmMeshMergeAsset` 仅重烘焙，不必重选源。
-
-## 7. 验收场景
-
-1. **通用场景**：在任意空项目中合并 2 个不同材质（不同贴图 + 不同 tint）的模型，生成 1 个 Mesh + 1 个材质；用 MeshRenderer 逐个切换索引，画面上正确显示对应模型，其余不出现。
-2. **索引传递**：路径 A（MPB）与路径 B（矩阵分量）分别验证同一合并资产可用。
-3. **边界**：贴图尺寸不一致 / UV 越界 / 通道占用 / shader 不一致时给出明确报错，不产出损坏资产。
-
-Unity 编译与运行验证由用户手动完成，AI 不自动编译、不新增测试。
-
-## 8. 后续阶段：HmSlgGame 接入（不属于本包范围）
-
-宿主项目的 `Assets/NSLGDemoTerrain/GPUInstanceThree` 是第一个使用方，接入要点（另立任务）：
-
-- 现状：Config 定义 81 种树，36 张 Forest_Node 布局实际使用 23 种（24 个 mesh+材质组合），1,003,802 个实例；实际用到 10 个 Mesh（顶点 40~141）、32 个材质、9 张生效的 diffuse 贴图。
-- 接入形态：把 23 个渲染对象归并为 1 个（合并 mesh + 单材质），每个实例带来源索引；用路径 B（矩阵分量）传索引，因为 `GPUInstanceRenderer` 只上传 `Matrix4x4[]`。
-- 注意：页与批次按 renderObject 组织，只把 23 个 renderObject 指向同一合并 mesh 不会减少 dc，必须真正归并成一个渲染对象。
-- 实例的 `boundsXZ` 要按原树的包围盒写，不能用合并 mesh 的并集包围盒。
-- 全图 LOD 会隐藏全部树，峰值可见约 100~200 棵，顶点放大代价可忽略；批量上限 `MaxInstancesPerDraw = 511` 在每树种可见实例远小于 511 时不是瓶颈。
-
-## 9. 实施提醒
-
-- 先建包骨架（package.json、Runtime/、Editor/），再实现合并工具，最后做参考 shader 与文档。
-- 遵守公司结构规范的单层 PascalCase 程序集/命名空间、Runtime 不引用 UnityEditor、一个文件一个顶层类型。
-- 不自行新增测试、不自行执行 Unity 编译；完成后由用户在 Unity 中手动验证。
-- 插件自己的设计文档随包维护（`Documentation~/` 或包内说明），本文件可作为起点。
+仅进行了静态检查；未启动 Unity、导入、执行测试或构建。代码未编译，由用户人工编译验证。

@@ -21,8 +21,7 @@ namespace HmMeshMerge
         [SerializeField] private Material _material;
 
         /// <summary>
-        /// 索引写入的通道；也是新建资产时的默认值。默认用 UV3：它避开了 UV0（主 UV）、
-        /// UV1（烘焙 lightmap）、UV2（实时 lightmap）与 UV4（URP 用作顶点输入语义）。
+        /// 索引写入通道，默认 UV3（TEXCOORD3）；必须确认所选通道未被任何源网格占用。
         /// </summary>
         public HmMeshMergeChannel indexChannel = HmMeshMergeChannel.TexCoord3;
 
@@ -35,13 +34,13 @@ namespace HmMeshMerge
         /// <summary>参数表：属性名与它在参数纹理里的行号。行号稳定，移除的参数保留为空行。</summary>
         public IReadOnlyList<HmMeshMergeParameterEntry> Parameters => _parameters;
 
-        /// <summary>合并后的网格；顶点携带来源索引与外观参数。</summary>
+        /// <summary>合并后的网格；保留源顶点数据并新增来源索引。</summary>
         public Mesh MergedMesh => _mergedMesh;
 
         /// <summary>合并后的材质：挂载各贴图属性的合并结果与参数查找纹理。</summary>
         public Material Material => _material;
 
-        /// <summary>子树数量；顶点色作索引通道时不超过 256。</summary>
+        /// <summary>来源数量；顶点色作索引通道时不超过 256。</summary>
         public int SourceCount => _sources.Count;
 
         /// <summary>替换参数表；由工具在首次填表或重排时调用。</summary>
