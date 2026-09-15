@@ -33,8 +33,19 @@ namespace HmMeshMergeEditor
 
         private void OnDisable()
         {
+            FlushEdits();
             _serialized?.Dispose();
             _serialized = null;
+        }
+
+        /// <summary>提交窗口编辑并写入磁盘；没有实际改动时资产库不会重写文件。</summary>
+        private void FlushEdits()
+        {
+            _serialized?.ApplyModifiedProperties();
+            if (_asset != null)
+            {
+                AssetDatabase.SaveAssetIfDirty(_asset);
+            }
         }
 
         private void OnGUI()
@@ -54,7 +65,7 @@ namespace HmMeshMergeEditor
             DrawActions();
             DrawResults();
             EditorGUILayout.EndScrollView();
-            _serialized.ApplyModifiedProperties();
+            FlushEdits();
         }
 
         /// <summary>未绑定配置时只提供新建与选择两条入口。</summary>
@@ -77,7 +88,7 @@ namespace HmMeshMergeEditor
                 "选择已有配置", null, typeof(HmMeshMergeAsset), false);
             if (EditorGUI.EndChangeCheck() && selected != null)
             {
-                _serialized?.ApplyModifiedProperties();
+                FlushEdits();
                 _asset = selected;
                 BindAsset();
                 GUIUtility.ExitGUI();
@@ -92,7 +103,7 @@ namespace HmMeshMergeEditor
                 return;
             }
 
-            _serialized?.ApplyModifiedProperties();
+            FlushEdits();
             var asset = ScriptableObject.CreateInstance<HmMeshMergeAsset>();
             asset.name = Path.GetFileNameWithoutExtension(path);
             AssetDatabase.CreateAsset(asset, path);
@@ -122,7 +133,7 @@ namespace HmMeshMergeEditor
                 "合并配置", _asset, typeof(HmMeshMergeAsset), false);
             if (EditorGUI.EndChangeCheck() && selected != _asset)
             {
-                _serialized?.ApplyModifiedProperties();
+                FlushEdits();
                 _asset = selected;
                 BindAsset();
                 GUIUtility.ExitGUI();
@@ -229,7 +240,7 @@ namespace HmMeshMergeEditor
 
         private void FillParametersFromShader(SerializedProperty table)
         {
-            _serialized.ApplyModifiedProperties();
+            FlushEdits();
             if (_asset.Sources.Count == 0 || _asset.Sources[0] == null || _asset.Sources[0].material == null)
             {
                 Report("请先添加源，且第一个源要带材质，才能列出它的着色器属性。", true);
@@ -259,7 +270,7 @@ namespace HmMeshMergeEditor
                 entry.FindPropertyRelative(nameof(HmMeshMergeParameterEntry.active)).boolValue = generated[i].active;
             }
 
-            _serialized.ApplyModifiedProperties();
+            FlushEdits();
             Report("已刷新属性：已有行号与选择保留；新属性追加。首次按差异排序并默认启用不同项。", false);
         }
 
@@ -334,7 +345,7 @@ namespace HmMeshMergeEditor
 
         private void Execute()
         {
-            _serialized.ApplyModifiedProperties();
+            FlushEdits();
             _errors.Clear();
             _result = string.Empty;
             try

@@ -4,13 +4,13 @@
 
 ## 主链与职责
 
-入口 HmMeshMergeWindow.Execute 先把 SerializedObject 的编辑应用到配置，再调用 HmMeshMergeBuilder.Build。
+入口 HmMeshMergeWindow.Execute 先把 SerializedObject 的编辑应用到配置并写盘，再调用 HmMeshMergeBuilder.Build。窗口内每次提交编辑同样即时写盘，关闭窗口时再提交一次。
 
 | 类型 | 职责及调用关系 |
 |---|---|
 | HmMeshMergeAsset | 配置和导出结果的唯一载体，运行时按只读配置使用 |
 | HmMeshMergeSource / ParameterEntry / Channel | 来源、稳定行、索引通道的数据契约 |
-| HmMeshMergeWindow | 新建/选择配置、序列化编辑、显式重排确认、显示消息并同步 Console |
+| HmMeshMergeWindow | 新建/选择配置、序列化编辑（提交即写盘）、显式重排确认、显示消息并同步 Console |
 | HmMeshMergeBuilder | 校验 → 生成数组 → 合并几何 → 生成 LUT → 生成/选择 Shader → 绑定并保存输出 |
 | HmMeshMergeParameterWriter | 读取和比较原始值、刷新稳定参数表、生成及保存浮点 LUT |
 | HmMeshMergeTextureArrayImporter | 根据源贴图导入产物生成每层像素都有 CPU 数据的 Texture2DArray |
