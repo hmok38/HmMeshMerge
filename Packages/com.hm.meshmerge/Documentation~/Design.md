@@ -11,7 +11,7 @@
 | HmMeshMergeAsset | 配置和导出结果的唯一载体，运行时按只读配置使用 |
 | HmMeshMergeSource / ParameterEntry / Channel | 来源、稳定行、索引通道的数据契约 |
 | HmMeshMergeWindow | 新建/选择配置、序列化编辑（提交即写盘）、显式重排确认、显示消息并同步 Console |
-| HmMeshMergeBuilder | 校验 → 生成数组 → 合并几何 → 生成 LUT → 生成/选择 Shader → 绑定并保存输出 |
+| HmMeshMergeBuilder | 校验（贴图不一致时逐层输出可定位的日志）→ 生成数组 → 合并几何 → 生成 LUT → 生成/选择 Shader → 绑定并保存输出 |
 | HmMeshMergeParameterWriter | 读取和比较原始值、刷新稳定参数表、生成及保存浮点 LUT |
 | HmMeshMergeTextureArrayImporter | 根据源贴图导入产物生成每层像素都有 CPU 数据的 Texture2DArray |
 | HmMeshMergeTextureSet | 生成阶段的属性名和数组引用 |
@@ -45,7 +45,7 @@ Runtime 编入 HmMeshMerge，不引用 UnityEditor。Editor 编入仅 Editor 平
 
 .hmtexarray 源文件为空，贴图引用按顺序存在其 .meta 导入设置中。Importer 对有效来源先声明 DependsOnArtifact，随后校验和生成；错误时也保留已知依赖，便于源贴图修复后再次导入。
 
-校验实际宽高、graphicsFormat（包含 sRGB）、mip 层数和采样设置；不以压缩设置名称替代实际格式。任一参数不一致只在点击“执行合并”时报出明细：分行列出需要修改的层、建议值与全部来源贴图的参数清单；数组资产重导（改源贴图、切平台、打开工程）时只记录一行“未生成数组”的提示，不在非合并时机刷出长清单。插件不缩放、不改源导入设置，由用户手动统一。来源需手动开启 Read/Write，Crunch 需关闭。数组按实际 TextureFormat、mip 数与线性标识创建；发生格式回退即报错。逐层逐 mip 的 GetPixelData / SetPixelData 写入 CPU 数据后 Apply，避免只复制 GPU 内容却缺少可保存像素。
+校验实际宽高、graphicsFormat（包含 sRGB）、mip 层数和采样设置；不以压缩设置名称替代实际格式。任一参数不一致只在点击“执行合并”时报出明细：按来源贴图逐条列出参数，需要修改的层在原条目内直接跟“建议”，引用同一组贴图的属性（如 _BaseMap 与 _MainTex 指向同一批贴图）并列属性名、共用一条报告；数组资产重导（改源贴图、切平台、打开工程）时只记录一行“未生成数组”的提示，不在非合并时机刷出长清单。需要修改的来源贴图各自输出一条携带贴图对象的日志，同一贴图只输出一次，单击该条即可在 Project 中定位对应贴图；校验失败的汇总仍只输出一次，异常本身不再重复打印。插件不缩放、不改源导入设置，由用户手动统一。来源需手动开启 Read/Write，Crunch 需关闭。数组按实际 TextureFormat、mip 数与线性标识创建；发生格式回退即报错。逐层逐 mip 的 GetPixelData / SetPixelData 写入 CPU 数据后 Apply，避免只复制 GPU 内容却缺少可保存像素。
 
 源贴图和输出数组保留 CPU 数据以满足导入与保存，需要计入内存开销。切换目标平台后的格式由实际源导入产物决定；未出包验证前不声称 Android 一定是 ASTC。
 

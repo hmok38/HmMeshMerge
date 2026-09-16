@@ -1,8 +1,8 @@
 {
-  "name": "com.hm.meshmerge",
-  "version": "0.1.0",
+  "name": "com.huangmin.meshmerge",
+  "version": "0.1.1",
   "displayName": "Hm Mesh Merge",
-  "description": "把多个共享同一 Shader 的模型合并成 1 个 Mesh 与 1 个材质，每个顶点带来源索引，绘制时按索引只显示其中一个来源，用于降低 draw call。",
+  "description": "\u628a\u591a\u4e2a\u5171\u4eab\u540c\u4e00 Shader \u7684\u6a21\u578b\u5408\u5e76\u6210 1 \u4e2a Mesh \u4e0e 1 \u4e2a\u6750\u8d28\uff0c\u6bcf\u4e2a\u9876\u70b9\u5e26\u6765\u6e90\u7d22\u5f15\uff0c\u7ed8\u5236\u65f6\u6309\u7d22\u5f15\u53ea\u663e\u793a\u5176\u4e2d\u4e00\u4e2a\u6765\u6e90\uff0c\u7528\u4e8e\u964d\u4f4e draw call\u3002",
   "unity": "2022.3",
   "keywords": [
     "mesh",
@@ -12,8 +12,8 @@
   ],
   "samples": [
     {
-      "displayName": "URP Cutout 参考 Shader",
-      "description": "展示如何接入来源索引判断、纹理数组与参数查找纹理（URP，含阴影与深度 Pass）。",
+      "displayName": "URP Cutout \u53c2\u8003 Shader",
+      "description": "\u5c55\u793a\u5982\u4f55\u63a5\u5165\u6765\u6e90\u7d22\u5f15\u5224\u65ad\u3001\u7eb9\u7406\u6570\u7ec4\u4e0e\u53c2\u6570\u67e5\u627e\u7eb9\u7406\uff08URP\uff0c\u542b\u9634\u5f71\u4e0e\u6df1\u5ea6 Pass\uff09\u3002",
       "path": "Samples~/UrpCutout"
     }
   ],

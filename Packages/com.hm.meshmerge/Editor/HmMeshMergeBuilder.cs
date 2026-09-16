@@ -69,21 +69,87 @@ namespace HmMeshMergeEditor
                 return errors;
             }
 
-            foreach (string name in TextureParameters(asset))
+            // 引用同一组贴图的属性共用一次校验与报告，避免同一问题重复输出。
+            var problems = new List<(Texture2D texture, string block)>();
+            foreach ((List<string> names, List<Texture2D> textures) group in GroupTextureParameters(asset))
             {
-                var textures = new List<Texture2D>();
-                foreach (HmMeshMergeSource source in asset.Sources)
+                if (!HmMeshMergeTextureArrayImporter.ValidateTextures(group.textures, out string reason,
+                    out var layerProblems))
                 {
-                    textures.Add(source.material.GetTexture(name) as Texture2D);
-                }
-
-                if (!HmMeshMergeTextureArrayImporter.ValidateTextures(textures, out string reason))
-                {
-                    errors.Add($"{name}：{reason}");
+                    problems.AddRange(layerProblems);
+                    errors.Add($"{string.Join("、", group.names)}：{reason}");
                 }
             }
 
+            LogTextureProblems(problems);
             return errors;
+        }
+
+        /// <summary>按来源贴图序列分组属性名；序列相同的属性共用一次报告，顺序不同视为不同数组。</summary>
+        private static List<(List<string> names, List<Texture2D> textures)> GroupTextureParameters(
+            HmMeshMergeAsset asset)
+        {
+            var groups = new List<(List<string> names, List<Texture2D> textures)>();
+            foreach (string name in TextureParameters(asset))
+            {
+                List<Texture2D> textures = CollectTextures(asset, name);
+                int index = groups.FindIndex(group => SameTextures(group.textures, textures));
+                if (index < 0)
+                {
+                    groups.Add((new List<string> { name }, textures));
+                    continue;
+                }
+
+                List<string> names = groups[index].names;
+                names.Add(name);
+            }
+
+            return groups;
+        }
+
+        private static List<Texture2D> CollectTextures(HmMeshMergeAsset asset, string name)
+        {
+            var textures = new List<Texture2D>();
+            foreach (HmMeshMergeSource source in asset.Sources)
+            {
+                textures.Add(source.material.GetTexture(name) as Texture2D);
+            }
+
+            return textures;
+        }
+
+        /// <summary>按顺序比较两组来源贴图，顺序不同即数组内容不同。</summary>
+        private static bool SameTextures(IReadOnlyList<Texture2D> left, IReadOnlyList<Texture2D> right)
+        {
+            if (left.Count != right.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.Count; i++)
+            {
+                if (left[i] != right[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>逐条输出需要修改的来源贴图；条目携带贴图对象，单击 Console 条目即可在 Project 中定位。</summary>
+        private static void LogTextureProblems(List<(Texture2D texture, string block)> problems)
+        {
+            var logged = new HashSet<(Texture2D texture, string block)>();
+            foreach ((Texture2D texture, string block) problem in problems)
+            {
+                if (!logged.Add(problem))
+                {
+                    continue;
+                }
+
+                Debug.LogError($"[HmMeshMerge] {problem.block}", problem.texture);
+            }
         }
 
         private static void ValidateSources(HmMeshMergeAsset asset, List<string> errors)

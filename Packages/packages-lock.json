@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "com.hm.meshmerge": {
+    "com.huangmin.meshmerge": {
       "version": "file:com.hm.meshmerge",
       "depth": 0,
       "source": "embedded",

@@ -43,8 +43,8 @@ namespace HmMeshMergeEditor
                 return;
             }
 
-            // 明细只在点击“执行合并”时由 Builder 报出；重导阶段只说明数组没生成，避免非合并时机刷出长清单。
-            if (!ValidateTextures(_textures, out _))
+            // 明细只在点击“执行合并”时由 Builder 逐层报出；重导阶段只说明数组没生成，避免非合并时机刷出长清单。
+            if (!ValidateTextures(_textures, out _, out _))
             {
                 ctx.LogImportError($"{ctx.assetPath} 的来源贴图参数不一致，未生成数组。" +
                     "在网格合并窗口点击“执行合并”可看到需要修改的项与建议尺寸。");
@@ -106,8 +106,11 @@ namespace HmMeshMergeEditor
                 path.StartsWith("Packages/", StringComparison.Ordinal));
         }
 
-        internal static bool ValidateTextures(IReadOnlyList<Texture2D> textures, out string reason)
+        /// <summary>校验各层能否组成数组：reason 为汇总文本，problems 为需要修改的层及其贴图，供调用方逐条输出。</summary>
+        internal static bool ValidateTextures(IReadOnlyList<Texture2D> textures, out string reason,
+            out List<(Texture2D texture, string block)> problems)
         {
+            problems = new List<(Texture2D texture, string block)>();
             if (textures.Count == 0 || textures.Count > SystemInfo.maxTextureArraySlices)
             {
                 reason = $"数组层数 {textures.Count} 无效，当前设备上限为 {SystemInfo.maxTextureArraySlices}。";
@@ -138,17 +141,16 @@ namespace HmMeshMergeEditor
 
             Texture2D master = textures[0];
             ResolveTargetSize(textures, out int targetWidth, out int targetHeight);
-            var blocks = new List<string>();
             for (int i = 0; i < textures.Count; i++)
             {
                 string block = DescribeProblems(i, master, textures[i], targetWidth, targetHeight);
                 if (block != null)
                 {
-                    blocks.Add(block);
+                    problems.Add((textures[i], block));
                 }
             }
 
-            if (blocks.Count == 0)
+            if (problems.Count == 0)
             {
                 reason = string.Empty;
                 return true;
@@ -157,7 +159,7 @@ namespace HmMeshMergeEditor
             var listing = new List<string>();
             for (int i = 0; i < textures.Count; i++)
             {
-                listing.Add(DescribeLayer(i, textures[i]));
+                listing.Add(DescribeLayer(i, master, textures[i], targetWidth, targetHeight));
             }
 
             var lines = new List<string>
@@ -165,10 +167,7 @@ namespace HmMeshMergeEditor
                 "数组各层必须完全一致：宽高、实际格式（含 sRGB）、mip 层数、Read/Write、Crunch 与采样设置。",
                 "数组尺寸取自第 0 层，宽高建议统一为各层最大尺寸。",
                 string.Empty,
-                "建议修改的来源贴图：",
-                string.Join("\n\n", blocks),
-                string.Empty,
-                "全部来源贴图：",
+                "全部来源贴图（单击对应的一条日志即可在 Project 中定位该贴图；带“建议”的层需要修改）：",
                 string.Join("\n\n", listing),
                 string.Empty,
                 "按上表修改对应源贴图的导入设置后重新合并。"
@@ -189,70 +188,82 @@ namespace HmMeshMergeEditor
             }
         }
 
-        /// <summary>列出该层需要手动修改的参数与建议；无需修改时返回 null。</summary>
+        /// <summary>列出该层需要手动修改的项与建议；无需修改时返回 null。</summary>
         private static string DescribeProblems(int index, Texture2D master, Texture2D texture,
             int targetWidth, int targetHeight)
         {
-            var problems = new List<string>();
-            if (texture.width != targetWidth || texture.height != targetHeight)
-            {
-                problems.Add($"宽高 {texture.width}×{texture.height}，建议调整为 {targetWidth}×{targetHeight}");
-            }
-
-            if (texture.graphicsFormat != master.graphicsFormat)
-            {
-                problems.Add($"实际格式 {DescribeFormat(texture)}，建议改成与第 0 层相同的 {DescribeFormat(master)}");
-            }
-
-            if (texture.mipmapCount != master.mipmapCount)
-            {
-                problems.Add($"mip {texture.mipmapCount} 层，建议改成与第 0 层相同的 {master.mipmapCount} 层");
-            }
-
-            if (texture.filterMode != master.filterMode || texture.wrapModeU != master.wrapModeU ||
-                texture.wrapModeV != master.wrapModeV || texture.anisoLevel != master.anisoLevel ||
-                texture.mipMapBias != master.mipMapBias)
-            {
-                problems.Add($"采样设置 {DescribeSampling(texture)}，建议改成与第 0 层相同的 {DescribeSampling(master)}");
-            }
-
-            if (!texture.isReadable)
-            {
-                problems.Add("未开启 Read/Write，建议在导入设置里勾选 Read/Write");
-            }
-
-            if (IsCrunched(texture))
-            {
-                problems.Add($"使用了 {texture.format} 压缩，建议关闭 Crunch 压缩");
-            }
-
-            if (problems.Count == 0)
+            List<string> advice = DescribeAdvice(master, texture, targetWidth, targetHeight);
+            if (advice.Count == 0)
             {
                 return null;
             }
 
             var lines = new List<string>
             {
-                $"第 {index} 层 {texture.name}",
-                $"  路径  {AssetDatabase.GetAssetPath(texture)}"
+                $"第 {index} 层 {AssetDatabase.GetAssetPath(texture)}"
             };
-            lines.AddRange(problems.ConvertAll(problem => "  " + problem));
+            lines.AddRange(advice.ConvertAll(item => "  " + item));
             return string.Join("\n", lines);
         }
 
-        /// <summary>逐层列出自查用的实际参数，便于按表修改源贴图导入设置。</summary>
-        private static string DescribeLayer(int index, Texture2D texture)
+        /// <summary>列出一层与其它层不一致、需要手动统一的参数与改法。</summary>
+        private static List<string> DescribeAdvice(Texture2D master, Texture2D texture,
+            int targetWidth, int targetHeight)
+        {
+            var advice = new List<string>();
+            if (texture.width != targetWidth || texture.height != targetHeight)
+            {
+                advice.Add($"宽高 {texture.width}×{texture.height} 与其他层不一致，需调整为 {targetWidth}×{targetHeight}");
+            }
+
+            if (texture.graphicsFormat != master.graphicsFormat)
+            {
+                advice.Add($"格式 {DescribeFormat(texture)} 与其他层不一致，需改成 {DescribeFormat(master)}");
+            }
+
+            if (texture.mipmapCount != master.mipmapCount)
+            {
+                advice.Add($"mip {texture.mipmapCount} 层与其他层不一致，需改成 {master.mipmapCount} 层");
+            }
+
+            if (texture.filterMode != master.filterMode || texture.wrapModeU != master.wrapModeU ||
+                texture.wrapModeV != master.wrapModeV || texture.anisoLevel != master.anisoLevel ||
+                texture.mipMapBias != master.mipMapBias)
+            {
+                advice.Add($"采样 {DescribeSampling(texture)} 与其他层不一致，需改成 {DescribeSampling(master)}");
+            }
+
+            if (!texture.isReadable)
+            {
+                advice.Add("未开启 Read/Write，需在导入设置里勾选");
+            }
+
+            if (IsCrunched(texture))
+            {
+                advice.Add($"使用了 {texture.format} 压缩，需关闭 Crunch");
+            }
+
+            return advice;
+        }
+
+        /// <summary>逐层列出实际参数与需要修改的建议，便于按表修改源贴图导入设置。</summary>
+        private static string DescribeLayer(int index, Texture2D master, Texture2D texture,
+            int targetWidth, int targetHeight)
         {
             var lines = new List<string>
             {
-                $"{index}  {texture.name}",
-                $"  路径  {AssetDatabase.GetAssetPath(texture)}",
+                $"{index}  {AssetDatabase.GetAssetPath(texture)}",
                 $"  宽高  {texture.width}×{texture.height}",
                 $"  格式  {DescribeFormat(texture)}",
                 $"  mip   {texture.mipmapCount} 层，Read/Write {(texture.isReadable ? "开" : "关")}，" +
                 $"Crunch {(IsCrunched(texture) ? "有" : "无")}",
                 $"  采样  {DescribeSampling(texture)}"
             };
+            foreach (string advice in DescribeAdvice(master, texture, targetWidth, targetHeight))
+            {
+                lines.Add("  建议  " + advice);
+            }
+
             return string.Join("\n", lines);
         }
 

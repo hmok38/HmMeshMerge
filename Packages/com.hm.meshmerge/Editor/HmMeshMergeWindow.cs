@@ -356,7 +356,11 @@ namespace HmMeshMergeEditor
             catch (System.Exception exception)
             {
                 Report(exception.Message, true);
-                Debug.LogException(exception, _asset);
+                // 校验与生成失败的消息已由 Report 完整输出，不重复打印；其他异常补记堆栈便于定位。
+                if (exception is not System.InvalidOperationException)
+                {
+                    Debug.LogException(exception, _asset);
+                }
             }
             finally
             {
