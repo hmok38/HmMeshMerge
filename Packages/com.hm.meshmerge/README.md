@@ -36,7 +36,7 @@
 
 生成的 HmRead 和 HmSample 函数包含实际行号及贴图取法。三个 Pass 统一处理来源选择和 Alpha 裁剪。模板不重现源 Shader 的光照、透明混合、法线解码或其他专有效果。
 
-生成模板对 `HmMeshMerge.hlsl` 的 `#include` 按工具运行工程里包的实际安装路径写入（嵌入包是 `Packages/<目录名>`，git 或本地安装是 `Packages/<包名>`），不写死包名。示例 Shader 是静态文件，路径固定为当前包名 `com.huangmin.meshmerge`，改名后需同步修改。
+生成模板对 `HmMeshMerge.hlsl` 的 `#include` 按工具运行工程里包的实际安装路径写入（嵌入包是 `Packages/<目录名>`，git 或本地安装是 `Packages/<包名>`），不写死包名。示例 Shader 是静态文件，路径固定为包名 `com.hm.meshmerge`，改名后需同步修改。
 
 合并数据不依赖宿主项目或实例化框架。**当前生成模板与示例针对 URP**；其他管线需移植数据读取和索引判断。默认实例属性路径不承诺 SRP Batcher 兼容。矩阵 m33 编码仅保留为自定义渲染路径接口，不能把编码矩阵当作标准 TRS 使用。
 

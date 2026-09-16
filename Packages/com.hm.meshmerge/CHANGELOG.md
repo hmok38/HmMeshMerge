@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 包名统一为 `com.hm.meshmerge`，与包目录 `Packages/com.hm.meshmerge` 一致；作者署名改为 `huangmin`。已安装该包的工程（如 HmSlgGame）需要把依赖名从 `com.huangmin.meshmerge` 改为 `com.hm.meshmerge` 后再更新包。
 - 修复在 git 或本地安装该包时生成 Shader 无法包含 HmMeshMerge.hlsl 的报错：模板不再写死包路径，改为按工具所在工程解析出的包路径生成；示例 Shader 与文档同步使用实际包名。
 - 排除由管线提供的 unity_ 内置属性，修复 unity_Lightmaps 重复声明；输出 Shader 已报错时停止绑定材质。
 - 按属性类型复制普通材质值，数组槽位只接收生成的 Texture2DArray，不再整体复制源材质的 2D 贴图绑定。
