@@ -106,11 +106,11 @@ namespace HmMeshMergeEditor
                 path.StartsWith("Packages/", StringComparison.Ordinal));
         }
 
-        /// <summary>校验各层能否组成数组：reason 为汇总文本，problems 为需要修改的层及其贴图，供调用方逐条输出。</summary>
+        /// <summary>校验各层能否组成数组：reason 为汇总文本，problems 为需要修改的贴图及其建议，供调用方合并后输出。</summary>
         internal static bool ValidateTextures(IReadOnlyList<Texture2D> textures, out string reason,
-            out List<(Texture2D texture, string block)> problems)
+            out List<(Texture2D texture, string advice)> problems)
         {
-            problems = new List<(Texture2D texture, string block)>();
+            problems = new List<(Texture2D texture, string advice)>();
             if (textures.Count == 0 || textures.Count > SystemInfo.maxTextureArraySlices)
             {
                 reason = $"数组层数 {textures.Count} 无效，当前设备上限为 {SystemInfo.maxTextureArraySlices}。";
@@ -143,10 +143,9 @@ namespace HmMeshMergeEditor
             ResolveTargetSize(textures, out int targetWidth, out int targetHeight);
             for (int i = 0; i < textures.Count; i++)
             {
-                string block = DescribeProblems(i, master, textures[i], targetWidth, targetHeight);
-                if (block != null)
+                foreach (string advice in DescribeAdvice(master, textures[i], targetWidth, targetHeight))
                 {
-                    problems.Add((textures[i], block));
+                    problems.Add((textures[i], advice));
                 }
             }
 
@@ -186,24 +185,6 @@ namespace HmMeshMergeEditor
                 width = Mathf.Max(width, texture.width);
                 height = Mathf.Max(height, texture.height);
             }
-        }
-
-        /// <summary>列出该层需要手动修改的项与建议；无需修改时返回 null。</summary>
-        private static string DescribeProblems(int index, Texture2D master, Texture2D texture,
-            int targetWidth, int targetHeight)
-        {
-            List<string> advice = DescribeAdvice(master, texture, targetWidth, targetHeight);
-            if (advice.Count == 0)
-            {
-                return null;
-            }
-
-            var lines = new List<string>
-            {
-                $"第 {index} 层 {AssetDatabase.GetAssetPath(texture)}"
-            };
-            lines.AddRange(advice.ConvertAll(item => "  " + item));
-            return string.Join("\n", lines);
         }
 
         /// <summary>列出一层与其它层不一致、需要手动统一的参数与改法。</summary>

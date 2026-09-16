@@ -1,6 +1,6 @@
 {
   "name": "com.huangmin.meshmerge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Hm Mesh Merge",
   "description": "\u628a\u591a\u4e2a\u5171\u4eab\u540c\u4e00 Shader \u7684\u6a21\u578b\u5408\u5e76\u6210 1 \u4e2a Mesh \u4e0e 1 \u4e2a\u6750\u8d28\uff0c\u6bcf\u4e2a\u9876\u70b9\u5e26\u6765\u6e90\u7d22\u5f15\uff0c\u7ed8\u5236\u65f6\u6309\u7d22\u5f15\u53ea\u663e\u793a\u5176\u4e2d\u4e00\u4e2a\u6765\u6e90\uff0c\u7528\u4e8e\u964d\u4f4e draw call\u3002",
   "unity": "2022.3",
@@ -18,6 +18,8 @@
     }
   ],
   "author": {
-    "name": "HM"
+    "name": "HuangMin",
+    "email": "hmok@163.com",
+    "url": "https://github.com/hmok38/HMFW"
   }
 }

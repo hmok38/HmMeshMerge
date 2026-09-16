@@ -70,7 +70,7 @@ namespace HmMeshMergeEditor
             }
 
             // 引用同一组贴图的属性共用一次校验与报告，避免同一问题重复输出。
-            var problems = new List<(Texture2D texture, string block)>();
+            var problems = new List<(Texture2D texture, string advice)>();
             foreach ((List<string> names, List<Texture2D> textures) group in GroupTextureParameters(asset))
             {
                 if (!HmMeshMergeTextureArrayImporter.ValidateTextures(group.textures, out string reason,
@@ -137,19 +137,38 @@ namespace HmMeshMergeEditor
             return true;
         }
 
-        /// <summary>逐条输出需要修改的来源贴图；条目携带贴图对象，单击 Console 条目即可在 Project 中定位。</summary>
-        private static void LogTextureProblems(List<(Texture2D texture, string block)> problems)
+        /// <summary>按贴图合并建议后输出：每张贴图只出一条日志，单击该条即可在 Project 中定位对应贴图。</summary>
+        private static void LogTextureProblems(List<(Texture2D texture, string advice)> problems)
         {
-            var logged = new HashSet<(Texture2D texture, string block)>();
-            foreach ((Texture2D texture, string block) problem in problems)
+            var merged = new List<(Texture2D texture, List<string> advice)>();
+            foreach ((Texture2D texture, string advice) problem in problems)
             {
-                if (!logged.Add(problem))
+                int index = merged.FindIndex(item => item.texture == problem.texture);
+                if (index < 0)
                 {
+                    merged.Add((problem.texture, new List<string> { problem.advice }));
                     continue;
                 }
 
-                Debug.LogError($"[HmMeshMerge] {problem.block}", problem.texture);
+                List<string> advice = merged[index].advice;
+                if (!advice.Contains(problem.advice))
+                {
+                    advice.Add(problem.advice);
+                }
             }
+
+            foreach ((Texture2D texture, List<string> advice) item in merged)
+            {
+                Debug.LogError(BuildProblemMessage(item.texture, item.advice), item.texture);
+            }
+        }
+
+        /// <summary>贴图路径加缩进的建议行。</summary>
+        private static string BuildProblemMessage(Texture2D texture, List<string> advice)
+        {
+            var lines = new List<string> { $"[HmMeshMerge] {AssetDatabase.GetAssetPath(texture)}" };
+            lines.AddRange(advice.ConvertAll(line => "  " + line));
+            return string.Join("\n", lines);
         }
 
         private static void ValidateSources(HmMeshMergeAsset asset, List<string> errors)
