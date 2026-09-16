@@ -15,10 +15,10 @@ namespace HmMeshMergeEditor
         public const string TEXTURES_FIELD = "_textures";
         private const int VERSION = 3;
 
-        [Tooltip("来源贴图，顺序即数组层号；需开启 Read/Write，以便保存实际像素数据。")]
+        [Tooltip("层贴图，顺序即数组层号（层按去重后的材质排列）；需开启 Read/Write，以便保存实际像素数据。")]
         [SerializeField] private List<Texture2D> _textures = new List<Texture2D>();
 
-        /// <summary>读取来源顺序；修改请通过导入器的序列化设置。</summary>
+        /// <summary>读取贴图层顺序；修改请通过导入器的序列化设置。</summary>
         public IReadOnlyList<Texture2D> Textures => _textures;
 
         /// <summary>导入时记录依赖；失败也记录有效来源，修复源贴图后可重新触发导入。</summary>
@@ -127,14 +127,14 @@ namespace HmMeshMergeEditor
             {
                 if (textures[i] == null)
                 {
-                    reason = $"第 {i} 层为空或不是 Texture2D；启用数组的每个来源都必须指定二维贴图。";
+                    reason = $"第 {i} 层为空或不是 Texture2D；启用数组的每个材质都必须指定二维贴图。";
                     return false;
                 }
 
                 if (!IsImportedAssetPath(AssetDatabase.GetAssetPath(textures[i])))
                 {
                     reason = $"第 {i} 层 {textures[i].name} 是内置或非资产贴图，无法作为数组的导入来源。" +
-                        "请停用该属性的数组化，或为每个来源指定 Assets / Packages 中的实际贴图。";
+                        "请停用该属性的数组化，或为每个材质指定 Assets / Packages 中的实际贴图。";
                     return false;
                 }
             }
@@ -168,7 +168,7 @@ namespace HmMeshMergeEditor
                 "数组各层必须完全一致：宽高、实际格式（含 sRGB）、mip 层数、Read/Write、Crunch 与采样设置。",
                 "数组尺寸取自第 0 层，宽高建议统一为各层最大尺寸。",
                 string.Empty,
-                "全部来源贴图（单击对应的一条日志即可在 Project 中定位该贴图；带“建议”的层需要修改）：",
+                "全部层贴图（单击对应的一条日志即可在 Project 中定位该贴图；带“建议”的层需要修改）：",
                 string.Join("\n\n", listing),
                 string.Empty,
                 "按上表修改对应源贴图的导入设置后重新合并。"

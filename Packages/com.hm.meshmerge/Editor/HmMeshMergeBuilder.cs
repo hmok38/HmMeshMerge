@@ -13,7 +13,7 @@ namespace HmMeshMergeEditor
     /// <summary>校验配置，组织网格、纹理与 Shader 生成，并把结果写回配置资产。</summary>
     internal static class HmMeshMergeBuilder
     {
-        /// <summary>生成的来源网格表属性名；与生成 Shader 里的声明保持一致。</summary>
+        /// <summary>生成的来源映射表属性名；与生成 Shader 里的声明保持一致。</summary>
         internal const string SOURCE_TABLE_NAME = "_HmMeshMergeSources";
 
         public static List<string> Validate(HmMeshMergeAsset asset)
@@ -113,9 +113,9 @@ namespace HmMeshMergeEditor
         private static List<Texture2D> CollectTextures(HmMeshMergeAsset asset, string name)
         {
             var textures = new List<Texture2D>();
-            foreach (HmMeshMergeSource source in asset.Sources)
+            foreach (Material material in CollectMaterials(asset.Sources))
             {
-                textures.Add(source.material.GetTexture(name) as Texture2D);
+                textures.Add(material.GetTexture(name) as Texture2D);
             }
 
             return textures;
@@ -288,17 +288,18 @@ namespace HmMeshMergeEditor
             string name = Path.GetFileNameWithoutExtension(assetPath);
             var sources = new List<HmMeshMergeSource>(asset.Sources);
             List<Mesh> meshes = CollectMeshes(sources);
+            List<Material> materials = CollectMaterials(sources);
             Mesh mesh = null;
             Texture2D parameters = null;
             Texture2D sourceTable = null;
             Material material = null;
             try
             {
-                List<HmMeshMergeTextureSet> sets = BuildTextureSets(asset, folder, name);
+                List<HmMeshMergeTextureSet> sets = BuildTextureSets(asset, folder, name, materials);
                 mesh = BuildMergedMesh(meshes, asset.indexChannel, name);
-                parameters = HmMeshMergeParameterWriter.Build(sources, asset.Parameters);
-                sourceTable = BuildSourceTable(sources, meshes);
-                Shader shader = ResolveOutputShader(asset, sources, meshes, sets, folder, name);
+                parameters = HmMeshMergeParameterWriter.Build(materials, asset.Parameters);
+                sourceTable = BuildSourceTable(sources, meshes, materials);
+                Shader shader = ResolveOutputShader(asset, sources, meshes, materials, sets, folder, name);
                 material = BuildMaterial(shader, sources[0].material, sets, parameters, sourceTable);
                 Mesh savedMesh = SaveMeshAsset(mesh, $"{folder}/{name}_Mesh.asset");
                 Texture2D savedParameters = HmMeshMergeParameterWriter.Save(parameters, name, folder);
@@ -307,7 +308,7 @@ namespace HmMeshMergeEditor
                     material.SetTexture(HmMeshMergeParameterWriter.TEXTURE_NAME, savedParameters);
                 }
 
-                material.SetTexture(SOURCE_TABLE_NAME, SaveTextureAsset(sourceTable, $"{folder}/{name}_Sources.asset"));
+                material.SetTexture(SOURCE_TABLE_NAME, SaveTextureAsset(sourceTable, $"{folder}/{name}_SourceMap.asset"));
                 Material savedMaterial = SaveMaterialAsset(material, $"{folder}/{name}_Material.mat");
                 asset.outputShader = shader;
                 asset.SetResult(savedMesh, savedMaterial);
@@ -338,7 +339,8 @@ namespace HmMeshMergeEditor
             }
         }
 
-        private static List<HmMeshMergeTextureSet> BuildTextureSets(HmMeshMergeAsset asset, string folder, string name)
+        private static List<HmMeshMergeTextureSet> BuildTextureSets(HmMeshMergeAsset asset, string folder, string name,
+            List<Material> materials)
         {
             var sets = new List<HmMeshMergeTextureSet>();
             List<string> properties = TextureParameters(asset);
@@ -372,11 +374,11 @@ namespace HmMeshMergeEditor
                 using (var serialized = new SerializedObject(importer))
                 {
                     SerializedProperty list = serialized.FindProperty(HmMeshMergeTextureArrayImporter.TEXTURES_FIELD);
-                    list.arraySize = asset.Sources.Count;
-                    for (int i = 0; i < asset.Sources.Count; i++)
+                    list.arraySize = materials.Count;
+                    for (int i = 0; i < materials.Count; i++)
                     {
                         list.GetArrayElementAtIndex(i).objectReferenceValue =
-                            asset.Sources[i].material.GetTexture(propertyName);
+                            materials[i].GetTexture(propertyName);
                     }
 
                     serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -423,7 +425,22 @@ namespace HmMeshMergeEditor
             return meshes;
         }
 
-        /// <summary>每个网格只写一份几何，顶点记录网格索引；来源与网格的对应关系写在来源网格表里。</summary>
+        /// <summary>按来源顺序收集去重后的材质；下标就是写进来源映射表的材质索引，同一个材质只出现一次。</summary>
+        private static List<Material> CollectMaterials(IReadOnlyList<HmMeshMergeSource> sources)
+        {
+            var materials = new List<Material>();
+            foreach (HmMeshMergeSource source in sources)
+            {
+                if (source != null && source.material != null && !materials.Contains(source.material))
+                {
+                    materials.Add(source.material);
+                }
+            }
+
+            return materials;
+        }
+
+        /// <summary>每个网格只写一份几何，顶点记录网格索引；来源到网格、材质的对应关系写在来源映射表里。</summary>
         private static Mesh BuildMergedMesh(List<Mesh> meshes, HmMeshMergeChannel channel, string name)
         {
             var vertices = new List<Vector3>();
@@ -571,18 +588,22 @@ namespace HmMeshMergeEditor
             }
         }
 
-        /// <summary>来源网格表：横轴为来源索引，纵轴一行，x 为该来源使用的网格索引。按整数坐标读取，不做过滤。</summary>
-        private static Texture2D BuildSourceTable(List<HmMeshMergeSource> sources, List<Mesh> meshes)
+        /// <summary>
+        /// 来源映射表：横轴为来源索引，纵轴一行，R 为该来源使用的网格索引，G 为该来源使用的材质索引。
+        /// 网格与材质都按引用去重，两者均按在来源列表中首次出现的顺序编号。按整数坐标读取，不做过滤。
+        /// </summary>
+        private static Texture2D BuildSourceTable(List<HmMeshMergeSource> sources, List<Mesh> meshes,
+            List<Material> materials)
         {
             var pixels = new Color[sources.Count];
             for (int i = 0; i < sources.Count; i++)
             {
-                pixels[i] = new Color(meshes.IndexOf(sources[i].mesh), 0f, 0f, 0f);
+                pixels[i] = new Color(meshes.IndexOf(sources[i].mesh), materials.IndexOf(sources[i].material), 0f, 0f);
             }
 
             var texture = new Texture2D(sources.Count, 1, TextureFormat.RGBAFloat, false, true)
             {
-                name = "Sources",
+                name = "SourceMap",
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp
             };
@@ -600,7 +621,8 @@ namespace HmMeshMergeEditor
         }
 
         private static Shader ResolveOutputShader(HmMeshMergeAsset asset, List<HmMeshMergeSource> sources,
-            List<Mesh> meshes, List<HmMeshMergeTextureSet> sets, string folder, string name)
+            List<Mesh> meshes, List<Material> materials, List<HmMeshMergeTextureSet> sets, string folder,
+            string name)
         {
             string path = $"{folder}/{name}_Shader.shader";
             if (asset.outputShader != null && AssetDatabase.GetAssetPath(asset.outputShader) != path)
@@ -609,7 +631,7 @@ namespace HmMeshMergeEditor
             }
 
             string guid = AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(asset));
-            File.WriteAllText(path, HmMeshMergeShaderWriter.Write(sources, meshes, asset.Parameters, sets,
+            File.WriteAllText(path, HmMeshMergeShaderWriter.Write(sources, meshes, materials, asset.Parameters, sets,
                 asset.indexChannel, $"HmMeshMerge/{name}_{guid}"));
             AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
             Shader shader = AssetDatabase.LoadAssetAtPath<Shader>(path);

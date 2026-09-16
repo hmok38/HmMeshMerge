@@ -251,13 +251,13 @@ namespace HmMeshMergeEditor
             }
         }
 
-        /// <summary>无启用数值时返回 null；保留全部已分配行的高度，空行写零。</summary>
-        public static Texture2D Build(IReadOnlyList<HmMeshMergeSource> sources,
+        /// <summary>按去重后的材质列出数值列。无启用数值时返回 null；保留全部已分配行的高度，空行写零。</summary>
+        public static Texture2D Build(IReadOnlyList<Material> materials,
             IReadOnlyList<HmMeshMergeParameterEntry> table)
         {
             int height = 0;
             bool hasValues = false;
-            Shader shader = sources[0].material.shader;
+            Shader shader = materials[0].shader;
             foreach (HmMeshMergeParameterEntry entry in table)
             {
                 height = Mathf.Max(height, entry.row + 1);
@@ -270,7 +270,7 @@ namespace HmMeshMergeEditor
                 return null;
             }
 
-            int width = sources.Count;
+            int width = materials.Count;
             var pixels = new Color[width * height];
             foreach (HmMeshMergeParameterEntry entry in table)
             {
@@ -280,9 +280,9 @@ namespace HmMeshMergeEditor
                     continue;
                 }
 
-                for (int i = 0; i < sources.Count; i++)
+                for (int i = 0; i < materials.Count; i++)
                 {
-                    Color value = ReadValue(sources[i].material, entry.propertyName);
+                    Color value = ReadValue(materials[i], entry.propertyName);
                     if (type == ShaderPropertyType.Color && QualitySettings.activeColorSpace == ColorSpace.Linear)
                     {
                         value = value.linear;
@@ -310,7 +310,7 @@ namespace HmMeshMergeEditor
             }
         }
 
-        /// <summary>保存浮点原生资产并保持既有 GUID；调用方负责释放尚未移交给资产库的临时纹理。</summary>
+        /// <summary>把参数 LUT 保存为「{配置名}_ParamLut.asset」并保持既有 GUID；调用方负责释放尚未移交给资产库的临时纹理。</summary>
         public static Texture2D Save(Texture2D texture, string assetName, string assetFolder)
         {
             if (texture == null)
@@ -318,8 +318,8 @@ namespace HmMeshMergeEditor
                 return null;
             }
 
-            string path = $"{assetFolder}/{assetName}_Params.asset";
-            texture.name = assetName + "_Params";
+            string path = $"{assetFolder}/{assetName}_ParamLut.asset";
+            texture.name = assetName + "_ParamLut";
             Texture2D existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
             if (existing == null)
             {

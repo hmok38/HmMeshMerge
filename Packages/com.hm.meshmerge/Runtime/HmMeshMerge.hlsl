@@ -12,14 +12,18 @@
 // 顶点侧的网格索引：顶点色通道用 HmMeshMergeDecodeColorIndex 解码；
 // UV 通道直接写入整数，用 round(uv.x) 读取即可。
 //
-// 来源到网格的对应关系写在来源网格表里（横轴为来源索引，纵轴只有一行），
-// 用 HmMeshMergeLoadSourceMesh 取激活来源使用的网格索引，再和顶点上的网格索引比较。
+// 来源到网格、材质的对应关系写在来源映射表里（横轴为来源索引，纵轴只有一行）：
+// R 是该来源使用的网格索引，G 是该来源使用的材质索引，两个索引装在同一个纹素的通道里，
+// 不分成两行（顶点阶段一次 Load 就能同时取回两者，省一次顶点纹理获取）。用
+// HmMeshMergeLoadSourceMesh 取网格索引，再和顶点上的网格索引比较；用
+// HmMeshMergeLoadSourceMaterial 取材质索引，供片元取数值和数组层。
 //
 // 来源参数的读取：合并网格的顶点只带网格索引，各来源的颜色、阈值等数值写在查找纹理
-// _HmMeshMergeParams 里（横轴为来源索引，纵轴为参数表的行），用 HmMeshMergeLoadParam
+// _HmMeshMergeParams 里（横轴为材质索引，纵轴为参数表的行），用 HmMeshMergeLoadParam
 // 取值；行号由合并资产的参数表记录，生成着色器的文件头会逐个列出。这张纹理与普通材质
-// 属性一样由使用者的着色器自己声明，取值时把纹理传进函数即可。数值按激活来源索引读取，
-// 因此同一网格的不同材质组合各自保留自己的数值。
+// 属性一样由使用者的着色器自己声明，取值时把纹理传进函数即可。横轴与纹理数组的层号一样
+// 都是材质索引（按材质引用去重后的下标），因此同一网格的不同材质组合各自保留自己的数值，
+// 重复材质也不会多占一列、一层。
 //
 // 激活索引只在顶点着色器取一次，再用 nointerpolation 插值给片元：实例属性与
 // unity_ObjectToWorld._m33 都只在顶点阶段拿到本次绘制的值，片元里重新取值会读到别的实例。
@@ -30,7 +34,7 @@
 //
 // 可选定义 HM_MESH_MERGE_INDEX_FROM_MATRIX，从 unity_ObjectToWorld._m33 读取。
 // 这会改变标准仿射矩阵（索引 0 时矩阵奇异），仅适合已控制变换、逆矩阵和剔除逻辑的自定义路径；
-// 该值同样是来源索引，可见性判断仍需先用来源网格表换成网格索引。
+// 该值同样是来源索引，可见性判断仍需先用来源映射表换成网格索引。
 // 不能把编码后的矩阵直接当作标准 TRS 用于任意 Unity 绘制 API。
 
 #if !defined(HM_MESH_MERGE_INDEX_FROM_MATRIX)
@@ -61,12 +65,19 @@ float HmMeshMergeDecodeUvIndex(float channelValue)
     return round(channelValue);
 }
 
-// 取某来源使用的网格索引：sourceTable 是合并工具写入的来源网格表（横轴为来源索引，
+// 取某来源使用的网格索引：sourceTable 是合并工具写入的来源映射表（横轴为来源索引，
 // 纵轴只有一行），sourceIndex 是源列表下标。可见性判断先用它把激活来源换成网格索引，
 // 再与顶点上解出的网格索引比较。网格索引按网格在来源列表中首次出现的顺序从 0 开始。
 float HmMeshMergeLoadSourceMesh(Texture2D sourceTable, float sourceIndex)
 {
     return sourceTable.Load(int3((int)round(sourceIndex), 0, 0)).x;
+}
+
+// 取某来源使用的材质索引（同一张表的 G 通道）：数值 LUT 的横轴与纹理数组的层号都用它。
+// 材质索引按材质引用在来源列表中首次出现的顺序从 0 开始，同一个材质只占一列、一层。
+float HmMeshMergeLoadSourceMaterial(Texture2D sourceTable, float sourceIndex)
+{
+    return sourceTable.Load(int3((int)round(sourceIndex), 0, 0)).y;
 }
 
 // 顶点的网格索引是否就是激活来源所用的网格；不一致的顶点应被移出裁剪空间。
@@ -76,14 +87,14 @@ bool HmMeshMergeIsMeshVisible(float vertexMeshIndex, float activeMeshIndex)
 }
 
 // 取某来源的一行参数：paramsTexture 是合并工具写入的参数查找纹理（横轴为来源索引，
-// 纵轴为参数表的行；生成的材质把它绑在 _HmMeshMergeParams 上），sourceIndex 是顶点
-// 着色器解出的来源索引，row 是参数表里的行号。取值走 Load 的整数坐标，不需要采样器。
+// 纵轴为参数表的行；生成的材质把它绑在 _HmMeshMergeParams 上），materialIndex 是顶点
+// 着色器换出的材质索引，row 是参数表里的行号。取值走 Load 的整数坐标，不需要采样器。
 // 纹理按参数传入，本文件因此不依赖任何材质属性声明，包含顺序不受限。
 // 参数从顶点插值到片元，round 用于消除插值误差；行号一经分配即保持稳定，
 // 可以直接写死在自有着色器里。
-float4 HmMeshMergeLoadParam(Texture2D paramsTexture, float sourceIndex, int row)
+float4 HmMeshMergeLoadParam(Texture2D paramsTexture, float materialIndex, int row)
 {
-    return paramsTexture.Load(int3((int)round(sourceIndex), row, 0));
+    return paramsTexture.Load(int3((int)round(materialIndex), row, 0));
 }
 
 #endif

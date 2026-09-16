@@ -4,10 +4,16 @@
 
 ## [Unreleased]
 
-- 修复重复几何：按引用对来源网格去重，同一个网格在合并网格里只保留一份顶点与三角形，不再随材质组合重复；顶点索引通道改存网格索引，新增来源网格表 `_Sources.asset`（Shader 侧 `_HmMeshMergeSources`）记录来源索引到网格索引的映射。
-- 参数 LUT 的行、纹理数组的层号改按激活来源索引（_MeshMergeIndex，顶点侧取一次后以 nointerpolation 插值给片元）读取，不再使用顶点上的网格索引，因此同一网格搭配不同材质时各自的数值与贴图互不串用。
+- 输出文件命名统一为「配置名_角色」，让名字直接对应作用：参数 LUT 由 `_Params.asset` 改为 `_ParamLut.asset`，来源映射表由 `_Sources.asset` 改为 `_SourceMap.asset`。旧名字的文件不自动删除或迁移，重新合并后材质会改绑新名字的文件。
+- 文档补充来源映射表的布局：宽为来源数、高 1，R 为网格索引、G 为材质索引，两个映射在同一个纹素的通道里而不是两行，顶点着色器一次 Load 就能同时取回两者；README、设计说明、示例与 hlsl 注释同步。
+- 材质同样按引用去重：同一个材质被多个来源引用时只占参数 LUT 的一列、纹理数组的一层，不再为每个来源重复存同一张贴图；数组层数由来源数改为去重后的材质数。
+- 来源映射表 `_SourceMap.asset` 增加 G 通道：R 仍为该来源使用的网格索引，G 为该来源使用的材质索引；新增 `HmMeshMergeLoadSourceMaterial` 取材质索引。
+- 参数 LUT 的横轴与纹理数组的层号改按材质索引读取：`HmMeshMergeLoadParam(纹理, materialIndex, 行号)` 的第二个参数不再传来源索引，自有 Shader 需先用 `HmMeshMergeLoadSourceMaterial` 换出材质索引。生成模板与示例已同步。
+- 贴图校验与数组日志改按层（材质）列出，消息中的层号与生成的数组一致。
+- 修复重复几何：按引用对来源网格去重，同一个网格在合并网格里只保留一份顶点与三角形，不再随材质组合重复；顶点索引通道改存网格索引，新增来源映射表 `_SourceMap.asset`（Shader 侧 `_HmMeshMergeSources`）记录来源索引到网格索引的映射。
+- 激活索引改为只在顶点着色器取一次：换成材质索引后以 nointerpolation 插值给片元，片元不再重读 _MeshMergeIndex 或 unity_ObjectToWorld._m33，避免片元阶段取到别的实例。
 - 生成模板与示例同步：顶点着色器先用 `HmMeshMergeLoadSourceMesh` 把激活来源换成网格索引，再调用 `HmMeshMergeIsMeshVisible`；`HmMeshMergeIsSourceVisible` 已移除。自有 Shader 需要同步改名，并保证传入的是网格索引。
-- 输出 Shader 必须声明 2D 属性 `_HmMeshMergeSources`，否则合并报错；生成的材质会自动绑定该来源网格表。
+- 输出 Shader 必须声明 2D 属性 `_HmMeshMergeSources`，否则合并报错；生成的材质会自动绑定该来源映射表。
 - 包名统一为 `com.hm.meshmerge`，与包目录 `Packages/com.hm.meshmerge` 一致；作者署名改为 `huangmin`。已安装该包的工程（如 HmSlgGame）需要把依赖名从 `com.huangmin.meshmerge` 改为 `com.hm.meshmerge` 后再更新包。
 - 修复在 git 或本地安装该包时生成 Shader 无法包含 HmMeshMerge.hlsl 的报错：模板不再写死包路径，改为按工具所在工程解析出的包路径生成；示例 Shader 与文档同步使用实际包名。
 - 排除由管线提供的 unity_ 内置属性，修复 unity_Lightmaps 重复声明；输出 Shader 已报错时停止绑定材质。
