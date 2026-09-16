@@ -1,21 +1,34 @@
 // HmMeshMergeShaderWriter 生成；输入为合并配置。下次合并会覆盖，请复制到自有 Shader 后修改。
-// 复制对应 Properties、纹理声明、HmRead/HmSample 函数和索引判断到自有 Shader。
+// 包含路径按本工程实际安装的包位置生成；复制到其他工程时按该工程的包路径修改。
+// 复制对应 Properties、纹理声明、HmRead/HmSample 函数和索引判断到自有 Shader；索引判断依赖 _HmMeshMergeSources。
 // 数值函数直接返回正确的标量/向量；启用行走 LUT，其他参数使用第一来源的普通材质属性。
 // _ST 函数返回各贴图的 Tiling.xy 和 Offset.zw，网格 UV 本身未改变。
 // 模板基于 URP；其他管线保留数据契约，替换管线相关宏、变换和 Pass。
 // 本模板只展示主贴图、主颜色、Alpha 裁剪，不模拟任意源 Shader 的完整效果。
-// 默认激活索引是材质/实例属性 _MeshMergeIndex；生成模板不保证 SRP Batcher 兼容。
-// 来源 0: tree_remake_02_ec304abe27193ba5 / blue
-// 来源 1: tree_remake_02_low_49491449df84709e / Red
+// 默认激活索引是材质/实例属性 _MeshMergeIndex，含义是来源索引；不保证 SRP Batcher 兼容。
+// _HmMeshMergeFilterVertices 为 1 时按网格索引筛选；为 0 时保留原网格全部顶点。
+// 来源到网格、材质的对应关系在 _HmMeshMergeSources（横轴为来源索引，纵轴一行）：
+// R 是网格索引，G 是材质索引，两个索引在同一个纹素的通道里，不分成两行，一次 Load 同时取回；
+// 数值 LUT 的横轴与纹理数组的层号都按材质索引读取，同一个材质也只占一列、一层。
+// 网格 0: tree_remake_02_ec304abe27193ba5；来源 0、2
+// 网格 1: tree_remake_02_low_49491449df84709e；来源 1、3
+// 材质 0: blue；来源 0、3
+// 材质 1: Red；来源 1、2
+// 来源 0: tree_remake_02_ec304abe27193ba5 / blue；网格 0，材质 0
+// 来源 1: tree_remake_02_low_49491449df84709e / Red；网格 1，材质 1
+// 来源 2: tree_remake_02_ec304abe27193ba5 / Red；网格 0，材质 1
+// 来源 3: tree_remake_02_low_49491449df84709e / blue；网格 1，材质 0
 // 行 0: _BaseMap，启用（纹理由数组或普通纹理承载，不写数值行）
 // 行 1: _MainTex，启用（纹理由数组或普通纹理承载，不写数值行）
 // 行 2: _BaseColor，启用（纹理由数组或普通纹理承载，不写数值行）
-Shader "HmMeshMerge/HmMeshMerge_40bbf1303b9e45545adf5e36e77b2dbf"
+Shader "HmMeshMerge/HmMeshMerge"
 {
     Properties
     {
+        _HmMeshMergeFilterVertices("按索引筛选顶点", Float) = 1
         _MeshMergeIndex("来源索引", Float) = 0
         _HmMeshMergeParams("来源参数 LUT", 2D) = "black" {}
+        _HmMeshMergeSources("来源映射表", 2D) = "black" {}
         _WorkflowMode("WorkflowMode", Float) = 1
         _BaseMap("Albedo", 2DArray) = "" {}
         _BaseColor("Color", Color) = (1, 1, 1, 1)
@@ -71,6 +84,7 @@ Shader "HmMeshMerge/HmMeshMerge_40bbf1303b9e45545adf5e36e77b2dbf"
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
         #include "Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl"
         TEXTURE2D(_HmMeshMergeParams);
+        TEXTURE2D(_HmMeshMergeSources);
         TEXTURE2D_ARRAY(_BaseMap); SAMPLER(sampler_BaseMap);
         TEXTURE2D(_MetallicGlossMap); SAMPLER(sampler_MetallicGlossMap);
         TEXTURE2D(_SpecGlossMap); SAMPLER(sampler_SpecGlossMap);
@@ -83,6 +97,7 @@ Shader "HmMeshMerge/HmMeshMerge_40bbf1303b9e45545adf5e36e77b2dbf"
         TEXTURE2D(_DetailNormalMap); SAMPLER(sampler_DetailNormalMap);
         TEXTURE2D_ARRAY(_MainTex); SAMPLER(sampler_MainTex);
         CBUFFER_START(UnityPerMaterial)
+            float _HmMeshMergeFilterVertices;
             float _WorkflowMode;
             float4 _BaseMap_ST;
             float4 _BaseColor;
@@ -130,169 +145,171 @@ Shader "HmMeshMerge/HmMeshMerge_40bbf1303b9e45545adf5e36e77b2dbf"
             float _GlossyReflections;
         CBUFFER_END
 
-        // 以下函数可直接复制。调用示例：HmRead_BaseColor(sourceIndex)、HmSample_BaseMap(uv, sourceIndex)。
+        // 以下函数可直接复制。调用示例：HmRead_BaseColor(materialIndex)、
+        // HmSample_BaseMap(uv, materialIndex)。materialIndex 是顶点着色器换出的材质索引，
+        // 片元里不要再取一遍激活索引：实例属性与矩阵 m33 只在顶点阶段有效。
         // 源属性 _WorkflowMode；普通材质属性。
-        float HmRead_WorkflowMode(float sourceIndex) { return _WorkflowMode; }
+        float HmRead_WorkflowMode(float materialIndex) { return _WorkflowMode; }
         // 源属性 _BaseMap_ST；普通材质属性。
-        float4 HmRead_BaseMap_ST(float sourceIndex) { return _BaseMap_ST; }
-        float4 HmSample_BaseMap(float2 uv, float sourceIndex)
+        float4 HmRead_BaseMap_ST(float materialIndex) { return _BaseMap_ST; }
+        float4 HmSample_BaseMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_BaseMap_ST(sourceIndex);
+            float4 st = HmRead_BaseMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
-            return SAMPLE_TEXTURE2D_ARRAY(_BaseMap, sampler_BaseMap, uv, (uint)round(sourceIndex));
+            return SAMPLE_TEXTURE2D_ARRAY(_BaseMap, sampler_BaseMap, uv, (uint)round(materialIndex));
         }
-        // 源属性 _BaseColor；LUT 第 2 行。
-        float4 HmRead_BaseColor(float sourceIndex) { return HmMeshMergeLoadParam(_HmMeshMergeParams, sourceIndex, 2); }
+        // 源属性 _BaseColor；LUT 第 2 行，按材质索引取。
+        float4 HmRead_BaseColor(float materialIndex) { return HmMeshMergeLoadParam(_HmMeshMergeParams, materialIndex, 2); }
         // 源属性 _Cutoff；普通材质属性。
-        float HmRead_Cutoff(float sourceIndex) { return _Cutoff; }
+        float HmRead_Cutoff(float materialIndex) { return _Cutoff; }
         // 源属性 _Smoothness；普通材质属性。
-        float HmRead_Smoothness(float sourceIndex) { return _Smoothness; }
+        float HmRead_Smoothness(float materialIndex) { return _Smoothness; }
         // 源属性 _SmoothnessTextureChannel；普通材质属性。
-        float HmRead_SmoothnessTextureChannel(float sourceIndex) { return _SmoothnessTextureChannel; }
+        float HmRead_SmoothnessTextureChannel(float materialIndex) { return _SmoothnessTextureChannel; }
         // 源属性 _Metallic；普通材质属性。
-        float HmRead_Metallic(float sourceIndex) { return _Metallic; }
+        float HmRead_Metallic(float materialIndex) { return _Metallic; }
         // 源属性 _MetallicGlossMap_ST；普通材质属性。
-        float4 HmRead_MetallicGlossMap_ST(float sourceIndex) { return _MetallicGlossMap_ST; }
-        float4 HmSample_MetallicGlossMap(float2 uv, float sourceIndex)
+        float4 HmRead_MetallicGlossMap_ST(float materialIndex) { return _MetallicGlossMap_ST; }
+        float4 HmSample_MetallicGlossMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_MetallicGlossMap_ST(sourceIndex);
+            float4 st = HmRead_MetallicGlossMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_MetallicGlossMap, sampler_MetallicGlossMap, uv);
         }
         // 源属性 _SpecColor；普通材质属性。
-        float4 HmRead_SpecColor(float sourceIndex) { return _SpecColor; }
+        float4 HmRead_SpecColor(float materialIndex) { return _SpecColor; }
         // 源属性 _SpecGlossMap_ST；普通材质属性。
-        float4 HmRead_SpecGlossMap_ST(float sourceIndex) { return _SpecGlossMap_ST; }
-        float4 HmSample_SpecGlossMap(float2 uv, float sourceIndex)
+        float4 HmRead_SpecGlossMap_ST(float materialIndex) { return _SpecGlossMap_ST; }
+        float4 HmSample_SpecGlossMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_SpecGlossMap_ST(sourceIndex);
+            float4 st = HmRead_SpecGlossMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_SpecGlossMap, sampler_SpecGlossMap, uv);
         }
         // 源属性 _SpecularHighlights；普通材质属性。
-        float HmRead_SpecularHighlights(float sourceIndex) { return _SpecularHighlights; }
+        float HmRead_SpecularHighlights(float materialIndex) { return _SpecularHighlights; }
         // 源属性 _EnvironmentReflections；普通材质属性。
-        float HmRead_EnvironmentReflections(float sourceIndex) { return _EnvironmentReflections; }
+        float HmRead_EnvironmentReflections(float materialIndex) { return _EnvironmentReflections; }
         // 源属性 _BumpScale；普通材质属性。
-        float HmRead_BumpScale(float sourceIndex) { return _BumpScale; }
+        float HmRead_BumpScale(float materialIndex) { return _BumpScale; }
         // 源属性 _BumpMap_ST；普通材质属性。
-        float4 HmRead_BumpMap_ST(float sourceIndex) { return _BumpMap_ST; }
-        float4 HmSample_BumpMap(float2 uv, float sourceIndex)
+        float4 HmRead_BumpMap_ST(float materialIndex) { return _BumpMap_ST; }
+        float4 HmSample_BumpMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_BumpMap_ST(sourceIndex);
+            float4 st = HmRead_BumpMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, uv);
         }
         // 源属性 _Parallax；普通材质属性。
-        float HmRead_Parallax(float sourceIndex) { return _Parallax; }
+        float HmRead_Parallax(float materialIndex) { return _Parallax; }
         // 源属性 _ParallaxMap_ST；普通材质属性。
-        float4 HmRead_ParallaxMap_ST(float sourceIndex) { return _ParallaxMap_ST; }
-        float4 HmSample_ParallaxMap(float2 uv, float sourceIndex)
+        float4 HmRead_ParallaxMap_ST(float materialIndex) { return _ParallaxMap_ST; }
+        float4 HmSample_ParallaxMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_ParallaxMap_ST(sourceIndex);
+            float4 st = HmRead_ParallaxMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_ParallaxMap, sampler_ParallaxMap, uv);
         }
         // 源属性 _OcclusionStrength；普通材质属性。
-        float HmRead_OcclusionStrength(float sourceIndex) { return _OcclusionStrength; }
+        float HmRead_OcclusionStrength(float materialIndex) { return _OcclusionStrength; }
         // 源属性 _OcclusionMap_ST；普通材质属性。
-        float4 HmRead_OcclusionMap_ST(float sourceIndex) { return _OcclusionMap_ST; }
-        float4 HmSample_OcclusionMap(float2 uv, float sourceIndex)
+        float4 HmRead_OcclusionMap_ST(float materialIndex) { return _OcclusionMap_ST; }
+        float4 HmSample_OcclusionMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_OcclusionMap_ST(sourceIndex);
+            float4 st = HmRead_OcclusionMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, uv);
         }
         // 源属性 _EmissionColor；普通材质属性。
-        float4 HmRead_EmissionColor(float sourceIndex) { return _EmissionColor; }
+        float4 HmRead_EmissionColor(float materialIndex) { return _EmissionColor; }
         // 源属性 _EmissionMap_ST；普通材质属性。
-        float4 HmRead_EmissionMap_ST(float sourceIndex) { return _EmissionMap_ST; }
-        float4 HmSample_EmissionMap(float2 uv, float sourceIndex)
+        float4 HmRead_EmissionMap_ST(float materialIndex) { return _EmissionMap_ST; }
+        float4 HmSample_EmissionMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_EmissionMap_ST(sourceIndex);
+            float4 st = HmRead_EmissionMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, uv);
         }
         // 源属性 _DetailMask_ST；普通材质属性。
-        float4 HmRead_DetailMask_ST(float sourceIndex) { return _DetailMask_ST; }
-        float4 HmSample_DetailMask(float2 uv, float sourceIndex)
+        float4 HmRead_DetailMask_ST(float materialIndex) { return _DetailMask_ST; }
+        float4 HmSample_DetailMask(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_DetailMask_ST(sourceIndex);
+            float4 st = HmRead_DetailMask_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_DetailMask, sampler_DetailMask, uv);
         }
         // 源属性 _DetailAlbedoMapScale；普通材质属性。
-        float HmRead_DetailAlbedoMapScale(float sourceIndex) { return _DetailAlbedoMapScale; }
+        float HmRead_DetailAlbedoMapScale(float materialIndex) { return _DetailAlbedoMapScale; }
         // 源属性 _DetailAlbedoMap_ST；普通材质属性。
-        float4 HmRead_DetailAlbedoMap_ST(float sourceIndex) { return _DetailAlbedoMap_ST; }
-        float4 HmSample_DetailAlbedoMap(float2 uv, float sourceIndex)
+        float4 HmRead_DetailAlbedoMap_ST(float materialIndex) { return _DetailAlbedoMap_ST; }
+        float4 HmSample_DetailAlbedoMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_DetailAlbedoMap_ST(sourceIndex);
+            float4 st = HmRead_DetailAlbedoMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_DetailAlbedoMap, sampler_DetailAlbedoMap, uv);
         }
         // 源属性 _DetailNormalMapScale；普通材质属性。
-        float HmRead_DetailNormalMapScale(float sourceIndex) { return _DetailNormalMapScale; }
+        float HmRead_DetailNormalMapScale(float materialIndex) { return _DetailNormalMapScale; }
         // 源属性 _DetailNormalMap_ST；普通材质属性。
-        float4 HmRead_DetailNormalMap_ST(float sourceIndex) { return _DetailNormalMap_ST; }
-        float4 HmSample_DetailNormalMap(float2 uv, float sourceIndex)
+        float4 HmRead_DetailNormalMap_ST(float materialIndex) { return _DetailNormalMap_ST; }
+        float4 HmSample_DetailNormalMap(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_DetailNormalMap_ST(sourceIndex);
+            float4 st = HmRead_DetailNormalMap_ST(materialIndex);
             uv = uv * st.xy + st.zw;
             return SAMPLE_TEXTURE2D(_DetailNormalMap, sampler_DetailNormalMap, uv);
         }
         // 源属性 _ClearCoatMask；普通材质属性。
-        float HmRead_ClearCoatMask(float sourceIndex) { return _ClearCoatMask; }
+        float HmRead_ClearCoatMask(float materialIndex) { return _ClearCoatMask; }
         // 源属性 _ClearCoatSmoothness；普通材质属性。
-        float HmRead_ClearCoatSmoothness(float sourceIndex) { return _ClearCoatSmoothness; }
+        float HmRead_ClearCoatSmoothness(float materialIndex) { return _ClearCoatSmoothness; }
         // 源属性 _Surface；普通材质属性。
-        float HmRead_Surface(float sourceIndex) { return _Surface; }
+        float HmRead_Surface(float materialIndex) { return _Surface; }
         // 源属性 _Blend；普通材质属性。
-        float HmRead_Blend(float sourceIndex) { return _Blend; }
+        float HmRead_Blend(float materialIndex) { return _Blend; }
         // 源属性 _Cull；普通材质属性。
-        float HmRead_Cull(float sourceIndex) { return _Cull; }
+        float HmRead_Cull(float materialIndex) { return _Cull; }
         // 源属性 _AlphaClip；普通材质属性。
-        float HmRead_AlphaClip(float sourceIndex) { return _AlphaClip; }
+        float HmRead_AlphaClip(float materialIndex) { return _AlphaClip; }
         // 源属性 _SrcBlend；普通材质属性。
-        float HmRead_SrcBlend(float sourceIndex) { return _SrcBlend; }
+        float HmRead_SrcBlend(float materialIndex) { return _SrcBlend; }
         // 源属性 _DstBlend；普通材质属性。
-        float HmRead_DstBlend(float sourceIndex) { return _DstBlend; }
+        float HmRead_DstBlend(float materialIndex) { return _DstBlend; }
         // 源属性 _SrcBlendAlpha；普通材质属性。
-        float HmRead_SrcBlendAlpha(float sourceIndex) { return _SrcBlendAlpha; }
+        float HmRead_SrcBlendAlpha(float materialIndex) { return _SrcBlendAlpha; }
         // 源属性 _DstBlendAlpha；普通材质属性。
-        float HmRead_DstBlendAlpha(float sourceIndex) { return _DstBlendAlpha; }
+        float HmRead_DstBlendAlpha(float materialIndex) { return _DstBlendAlpha; }
         // 源属性 _ZWrite；普通材质属性。
-        float HmRead_ZWrite(float sourceIndex) { return _ZWrite; }
+        float HmRead_ZWrite(float materialIndex) { return _ZWrite; }
         // 源属性 _BlendModePreserveSpecular；普通材质属性。
-        float HmRead_BlendModePreserveSpecular(float sourceIndex) { return _BlendModePreserveSpecular; }
+        float HmRead_BlendModePreserveSpecular(float materialIndex) { return _BlendModePreserveSpecular; }
         // 源属性 _AlphaToMask；普通材质属性。
-        float HmRead_AlphaToMask(float sourceIndex) { return _AlphaToMask; }
+        float HmRead_AlphaToMask(float materialIndex) { return _AlphaToMask; }
         // 源属性 _ReceiveShadows；普通材质属性。
-        float HmRead_ReceiveShadows(float sourceIndex) { return _ReceiveShadows; }
+        float HmRead_ReceiveShadows(float materialIndex) { return _ReceiveShadows; }
         // 源属性 _QueueOffset；普通材质属性。
-        float HmRead_QueueOffset(float sourceIndex) { return _QueueOffset; }
+        float HmRead_QueueOffset(float materialIndex) { return _QueueOffset; }
         // 源属性 _MainTex_ST；普通材质属性。
-        float4 HmRead_MainTex_ST(float sourceIndex) { return _MainTex_ST; }
-        float4 HmSample_MainTex(float2 uv, float sourceIndex)
+        float4 HmRead_MainTex_ST(float materialIndex) { return _MainTex_ST; }
+        float4 HmSample_MainTex(float2 uv, float materialIndex)
         {
-            float4 st = HmRead_MainTex_ST(sourceIndex);
+            float4 st = HmRead_MainTex_ST(materialIndex);
             uv = uv * st.xy + st.zw;
-            return SAMPLE_TEXTURE2D_ARRAY(_MainTex, sampler_MainTex, uv, (uint)round(sourceIndex));
+            return SAMPLE_TEXTURE2D_ARRAY(_MainTex, sampler_MainTex, uv, (uint)round(materialIndex));
         }
         // 源属性 _Color；普通材质属性。
-        float4 HmRead_Color(float sourceIndex) { return _Color; }
+        float4 HmRead_Color(float materialIndex) { return _Color; }
         // 源属性 _GlossMapScale；普通材质属性。
-        float HmRead_GlossMapScale(float sourceIndex) { return _GlossMapScale; }
+        float HmRead_GlossMapScale(float materialIndex) { return _GlossMapScale; }
         // 源属性 _Glossiness；普通材质属性。
-        float HmRead_Glossiness(float sourceIndex) { return _Glossiness; }
+        float HmRead_Glossiness(float materialIndex) { return _Glossiness; }
         // 源属性 _GlossyReflections；普通材质属性。
-        float HmRead_GlossyReflections(float sourceIndex) { return _GlossyReflections; }
+        float HmRead_GlossyReflections(float materialIndex) { return _GlossyReflections; }
         struct Attributes
         {
             float4 positionOS : POSITION;
             float3 normalOS : NORMAL;
             float2 uv : TEXCOORD0;
-            float2 sourceIndex : TEXCOORD3;
+            float2 meshIndex : TEXCOORD3;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
         struct Varyings
@@ -301,15 +318,18 @@ Shader "HmMeshMerge/HmMeshMerge_40bbf1303b9e45545adf5e36e77b2dbf"
             float3 positionWS : TEXCOORD0;
             float3 normalWS : TEXCOORD1;
             float2 uv : TEXCOORD2;
-            nointerpolation float sourceIndex : TEXCOORD3;
+            nointerpolation float materialIndex : TEXCOORD3;
         };
         bool PrepareVertex(Attributes input, out Varyings output)
         {
             output = (Varyings)0;
             UNITY_SETUP_INSTANCE_ID(input);
             output.positionCS = float4(2.0, 2.0, 2.0, 1.0);
-            output.sourceIndex = HmMeshMergeDecodeUvIndex(input.sourceIndex.x);
-            if (!HmMeshMergeIsSourceVisible(output.sourceIndex, HmMeshMergeGetActiveIndex()))
+            // 激活索引是来源索引：顶点侧换成网格索引判断可见性，换成材质索引插值给片元取数值。
+            float sourceIndex = HmMeshMergeGetActiveIndex();
+            output.materialIndex = HmMeshMergeLoadSourceMaterial(_HmMeshMergeSources, sourceIndex);
+            float meshIndex = HmMeshMergeLoadSourceMesh(_HmMeshMergeSources, sourceIndex);
+            if (!HmMeshMergeIsMeshVisible(HmMeshMergeDecodeUvIndex(input.meshIndex.x), meshIndex, _HmMeshMergeFilterVertices))
             {
                 return false;
             }
@@ -321,11 +341,11 @@ Shader "HmMeshMerge/HmMeshMerge_40bbf1303b9e45545adf5e36e77b2dbf"
         float4 SampleSource(Varyings input)
         {
             float4 color = float4(1, 1, 1, 1);
-            color *= HmSample_BaseMap(input.uv, input.sourceIndex);
-            color *= HmRead_BaseColor(input.sourceIndex);
-            if (HmRead_AlphaClip(input.sourceIndex) > 0.5)
+            color *= HmSample_BaseMap(input.uv, input.materialIndex);
+            color *= HmRead_BaseColor(input.materialIndex);
+            if (HmRead_AlphaClip(input.materialIndex) > 0.5)
             {
-                clip(color.a - HmRead_Cutoff(input.sourceIndex));
+                clip(color.a - HmRead_Cutoff(input.materialIndex));
             }
             return color;
         }

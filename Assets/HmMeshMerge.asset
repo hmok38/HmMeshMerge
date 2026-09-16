@@ -17,6 +17,10 @@ MonoBehaviour:
     material: {fileID: 2100000, guid: c08abe1b6344228429a77d3b5042282b, type: 2}
   - mesh: {fileID: 4300000, guid: e3f595be01872354a943a0064107ca9a, type: 2}
     material: {fileID: 2100000, guid: 0377a93c40f10b94e8df8a22efef9629, type: 2}
+  - mesh: {fileID: 4300000, guid: 043bc7d1432314b418764c5426b89e9b, type: 2}
+    material: {fileID: 2100000, guid: 0377a93c40f10b94e8df8a22efef9629, type: 2}
+  - mesh: {fileID: 4300000, guid: e3f595be01872354a943a0064107ca9a, type: 2}
+    material: {fileID: 2100000, guid: c08abe1b6344228429a77d3b5042282b, type: 2}
   _parameters:
   - propertyName: _BaseMap
     row: 0
@@ -27,7 +31,9 @@ MonoBehaviour:
   - propertyName: _BaseColor
     row: 2
     active: 1
-  _mergedMesh: {fileID: 4300000, guid: a4e15de25fb871d4e816232ee5e5a0d0, type: 2}
+  _mergeMeshes: 0
+  _mergedMesh: {fileID: 0}
   _material: {fileID: 2100000, guid: 78d15ee69fb29274c952328fbf24a0c4, type: 2}
   indexChannel: 3
   outputShader: {fileID: 4800000, guid: 9f7c82bd2e99d4a4a923ee46ea2f8b35, type: 3}
+  patchSourceShader: 0
