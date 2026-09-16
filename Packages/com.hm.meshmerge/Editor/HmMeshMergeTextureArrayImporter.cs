@@ -141,9 +141,11 @@ namespace HmMeshMergeEditor
 
             Texture2D master = textures[0];
             ResolveTargetSize(textures, out int targetWidth, out int targetHeight);
+            bool sizesAligned = SizesAligned(textures, targetWidth, targetHeight);
             for (int i = 0; i < textures.Count; i++)
             {
-                foreach (string advice in DescribeAdvice(master, textures[i], targetWidth, targetHeight))
+                foreach (string advice in DescribeAdvice(master, textures[i], targetWidth, targetHeight,
+                    sizesAligned))
                 {
                     problems.Add((textures[i], advice));
                 }
@@ -158,7 +160,7 @@ namespace HmMeshMergeEditor
             var listing = new List<string>();
             for (int i = 0; i < textures.Count; i++)
             {
-                listing.Add(DescribeLayer(i, master, textures[i], targetWidth, targetHeight));
+                listing.Add(DescribeLayer(i, master, textures[i], targetWidth, targetHeight, sizesAligned));
             }
 
             var lines = new List<string>
@@ -187,9 +189,23 @@ namespace HmMeshMergeEditor
             }
         }
 
+        /// <summary>各层尺寸是否都已等于目标尺寸；不一致时 mip 层数差异由尺寸决定，不再单独给 mip 建议。</summary>
+        private static bool SizesAligned(IReadOnlyList<Texture2D> textures, int targetWidth, int targetHeight)
+        {
+            foreach (Texture2D texture in textures)
+            {
+                if (texture.width != targetWidth || texture.height != targetHeight)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         /// <summary>列出一层与其它层不一致、需要手动统一的参数与改法。</summary>
         private static List<string> DescribeAdvice(Texture2D master, Texture2D texture,
-            int targetWidth, int targetHeight)
+            int targetWidth, int targetHeight, bool sizesAligned)
         {
             var advice = new List<string>();
             if (texture.width != targetWidth || texture.height != targetHeight)
@@ -202,9 +218,10 @@ namespace HmMeshMergeEditor
                 advice.Add($"格式 {DescribeFormat(texture)} 与其他层不一致，需改成 {DescribeFormat(master)}");
             }
 
-            if (texture.mipmapCount != master.mipmapCount)
+            if (sizesAligned && texture.mipmapCount != master.mipmapCount)
             {
-                advice.Add($"mip {texture.mipmapCount} 层与其他层不一致，需改成 {master.mipmapCount} 层");
+                advice.Add($"mip {texture.mipmapCount} 层与其他层不一致，需改成 {master.mipmapCount} 层" +
+                    "（检查 Generate Mip Maps 与 Mipmap Limit）");
             }
 
             if (texture.filterMode != master.filterMode || texture.wrapModeU != master.wrapModeU ||
@@ -229,7 +246,7 @@ namespace HmMeshMergeEditor
 
         /// <summary>逐层列出实际参数与需要修改的建议，便于按表修改源贴图导入设置。</summary>
         private static string DescribeLayer(int index, Texture2D master, Texture2D texture,
-            int targetWidth, int targetHeight)
+            int targetWidth, int targetHeight, bool sizesAligned)
         {
             var lines = new List<string>
             {
@@ -240,7 +257,7 @@ namespace HmMeshMergeEditor
                 $"Crunch {(IsCrunched(texture) ? "有" : "无")}",
                 $"  采样  {DescribeSampling(texture)}"
             };
-            foreach (string advice in DescribeAdvice(master, texture, targetWidth, targetHeight))
+            foreach (string advice in DescribeAdvice(master, texture, targetWidth, targetHeight, sizesAligned))
             {
                 lines.Add("  建议  " + advice);
             }
