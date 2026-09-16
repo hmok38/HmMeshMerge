@@ -11,23 +11,24 @@
 | HmMeshMergeAsset | 配置和导出结果的唯一载体，运行时按只读配置使用 |
 | HmMeshMergeSource / ParameterEntry / Channel | 来源、稳定行、索引通道的数据契约 |
 | HmMeshMergeWindow | 新建/选择配置、序列化编辑（提交即写盘）、显式重排确认、显示消息并同步 Console |
-| HmMeshMergeBuilder | 校验（贴图不一致时逐层输出可定位的日志）→ 生成数组 → 合并几何 → 生成 LUT → 生成/选择 Shader → 绑定并保存输出 |
+| HmMeshMergeBuilder | 校验（贴图不一致时逐层输出可定位的日志）→ 生成数组 → 按网格去重合并几何 → 生成 LUT 与来源网格表 → 生成/选择 Shader → 绑定并保存输出 |
 | HmMeshMergeParameterWriter | 读取和比较原始值、刷新稳定参数表、生成及保存浮点 LUT |
 | HmMeshMergeTextureArrayImporter | 根据源贴图导入产物生成每层像素都有 CPU 数据的 Texture2DArray |
 | HmMeshMergeTextureSet | 生成阶段的属性名和数组引用 |
 | HmMeshMergeShaderWriter | 逐属性读取函数、URP 无光照展示及三个 Pass |
-| HmMeshMerge.hlsl / HmMeshMergeIndex | 来源索引判断、LUT 读取；自定义路径的可选矩阵索引接口 |
+| HmMeshMerge.hlsl / HmMeshMergeIndex | 网格可见性判断、来源网格表与 LUT 读取；自定义路径的可选矩阵索引接口 |
 
 Runtime 编入 HmMeshMerge，不引用 UnityEditor。Editor 编入仅 Editor 平台的 HmMeshMergeEditor，只依赖 Runtime。没有新增程序集或辅助框架。
 
 ## 网格
 
-- 保持各源的局部坐标，把三角形索引加顶点偏移后拼接成一个子网格；不会复制源对象的 Transform。
-- 默认在空闲 UV3 的 x 分量写整数来源索引；可选 UV1–UV7 或顶点色。顶点色索引为 byte，Shader 解码 round(r * 255)，最多 256 个来源。
+- 按引用对来源网格去重：同一个网格只保留一份顶点与三角形，不再按来源重复。顺序按网格在来源列表中首次出现，下标就是顶点上写的网格索引。全部来源共用一个子网格；不会复制源对象的 Transform，各源保持自己的局部坐标。
+- 来源网格表（_Sources.asset）宽为来源数、高 1，RGBAFloat、线性、Point、Clamp，X 为来源索引、R 为该来源使用的网格索引。激活来源到网格索引的换算由 Shader 用 HmMeshMergeLoadSourceMesh 完成。
+- 默认在空闲 UV3 的 x 分量写整数网格索引；可选 UV1–UV7 或顶点色。顶点色索引为 byte，Shader 解码 round(r * 255)，上限是 256 个网格（按去重后的网格数校验，不是来源数）。
 - 保留已有法线、切线、颜色及全部 UV 的值。UV 采用来源中的最大维度；缺少属性的来源补零，颜色补白。不是顶点缓冲区逐字节复制，不承诺原始属性格式和顶点 ID 不变。
 - 选中索引通道被任意来源占用即报错。蒙皮、BlendShape 与非三角形拓扑报错，避免静默丢失数据。多子网格使用该来源指定的同一材质。
 - 超过 65535 顶点时用 UInt32；目标平台能否绘制由人工验证。
-- 所有三角形的顶点来自同一来源；三个 Pass 都按来源隐藏，使用确定在裁剪空间外的位置。
+- 所有三角形的顶点来自同一网格；三个 Pass 都先用来源网格表换出网格索引再判断，被隐藏时使用确定在裁剪空间外的位置。
 
 ## 参数表与 LUT
 
@@ -37,7 +38,7 @@ Runtime 编入 HmMeshMerge，不引用 UnityEditor。Editor 编入仅 Editor 平
 
 数值采用 RGBAFloat 原生 .asset，线性、Point、Clamp、无 mip、无压缩。宽度是来源数，高度覆盖所有已分配行，停用行填零。无启用数值则不生成 LUT，也不绑定旧 LUT。Color 在 Linear 项目中转成线性值；Vector、Float、Range 保留原始数值；Integer 不能被 float 精确表示时报错。
 
-读取函数 HmMeshMergeLoadParam(texture, sourceIndex, row) 使用整数坐标 Load。启用的数值访问器读取实际行，其他访问器返回普通材质属性；停用项明确使用第一来源的值。
+读取函数 HmMeshMergeLoadParam(texture, sourceIndex, row) 使用整数坐标 Load，sourceIndex 是激活来源索引（_MeshMergeIndex 的值），不是顶点上的网格索引，因此同一网格的不同材质组合各自取到自己的数值。启用的数值访问器读取实际行，其他访问器返回普通材质属性；停用项明确使用第一来源的值。
 
 ## 纹理数组
 
@@ -57,6 +58,8 @@ API 依据：[SetPixelData](https://docs.unity3d.com/2022.3/Documentation/Script
 
 默认激活索引来自 _MeshMergeIndex 材质/实例属性。模板基于 URP，不承诺 SRP Batcher 兼容；其他管线要移植对应宏和 Pass。专用 Shader 由使用者复制并接入自己的算法，而非任意 Shader 效果的转换器。
 
+顶点着色器先用 HmMeshMergeLoadSourceMesh 把激活来源索引换成网格索引，再与顶点上的网格索引比较；纹理数组层号与参数行都按同一个激活来源索引读取。该索引只在顶点着色器取一次，再作为 nointerpolation 插值交给片元，片元不重新读取实例属性或矩阵 m33（两者只在顶点阶段对应本次绘制）。生成模板要求输出 Shader 声明 _HmMeshMergeSources（来源网格表）与 _HmMeshMergeParams（参数 LUT）两个 2D 属性。
+
 生成模板对 HmMeshMerge.hlsl 的包含路径在生成时按当前工程解析出的包路径写入，因此嵌入包（目录名）与 git、本地安装（包名）都能编译；示例 Shader 是静态文件，只能写死当前包名。
 
 m33 编码作为已存在的公开接口保留，仅用于完全受控的自定义绘制：编码后不再是标准仿射矩阵，索引 0 时矩阵奇异，逆矩阵与剔除不能继续依赖普通 TRS 假设。普通验证使用材质属性路径。
@@ -65,15 +68,15 @@ m33 编码作为已存在的公开接口保留，仅用于完全受控的自定�
 
 ## 资产、失败与迁移
 
-- 输出位于配置资产目录。Mesh、Material、浮点 LUT 原地 CopySerialized，保持 GUID；Shader 名含配置 GUID，避免不同目录同名配置的 Shader 名碰撞。
+- 输出位于配置资产目录。Mesh、Material、浮点 LUT、来源网格表原地 CopySerialized，保持 GUID；Shader 名含配置 GUID，避免不同目录同名配置的 Shader 名碰撞。
 - 普通数组路径沿用旧命名；仅属性文件名冲突时增加标识。源 Shader 的插件保留名冲突在生成前报错。
-- 自定义输出 Shader 的数组维度与 LUT 属性必须满足契约，否则报错。输出 Shader 已有编译错误时，停止创建材质。普通参数按类型逐项复制，转换为数组的槽位跳过源 2D 贴图绑定，只接收生成数组。
+- 自定义输出 Shader 的数组维度、LUT 属性和来源网格表属性必须满足契约，否则报错。输出 Shader 已有编译错误时，停止创建材质。普通参数按类型逐项复制，转换为数组的槽位跳过源 2D 贴图绑定，只接收生成数组。
 - Builder 对非持久化的临时 Mesh、Texture、Material 使用 finally 释放；Importer 失败也释放临时数组。
 - 配置结果引用在生成完成后发布，但资产导出不是文件事务；I/O 或导入中途失败可能留下部分新文件或已更新文件。修复原因后重新合并。
 - 旧 _Params.png 和历史图集、Shader 副本不自动删除。重新合并绑定新的浮点 LUT；旧生成资产不会因改源码自动更新。
 
 ## 人工验证
 
-检查来源索引切换、不同/相同参数、负数和大于 1 的数值、HDR 颜色、ST、UV/颜色动画数据、阴影和深度裁剪；再次合并后检查场景/Prefab 中的 Mesh 与 Material 引用；关闭重开编辑器后检查数组像素，以及目标平台包内格式。
+检查来源索引切换、不同/相同参数、负数和大于 1 的数值、HDR 颜色、ST、UV/颜色动画数据、阴影和深度裁剪；核对同一网格被多个来源交叉引用时几何只有一份，且各来源的数值与数组层不串用。顶点着色器用 Load 读来源网格表（顶点纹理获取），需在目标平台确认可用。再次合并后检查场景/Prefab 中的 Mesh 与 Material 引用；关闭重开编辑器后检查数组像素，以及目标平台包内格式。
 
 仅进行了静态检查；未启动 Unity、导入、执行测试或构建。代码未编译，由用户人工编译验证。

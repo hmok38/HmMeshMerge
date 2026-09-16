@@ -1,27 +1,36 @@
 ﻿#ifndef HM_MESH_MERGE_INCLUDED
 #define HM_MESH_MERGE_INCLUDED
 
-// HmMeshMerge 的来源索引判断片段。使用前请确保着色器已包含所在管线的核心头文件
+// HmMeshMerge 的网格可见性判断与来源参数读取片段。使用前请确保着色器已包含所在管线的核心头文件
 // （例如 URP 的 Core.hlsl），本文件依赖其中的实例化宏。
 //
-// 顶点上的来源索引与本次绘制的激活索引不一致时，把该顶点移出裁剪空间（例如 float4(2, 2, 2, 1)），
+// 顶点上写入的是网格索引（去重后第几个网格），不是来源索引：同一个网格被多个来源使用时只存一份几何。
+// 顶点的网格索引与本次绘制的激活来源所用的网格不一致时，把该顶点移出裁剪空间（例如 float4(2, 2, 2, 1)），
 // 整个三角形被裁剪，不进入光栅化。该判断必须加到每个 Pass 的顶点着色器，
 // 包括阴影和深度 Pass，否则隐藏的来源仍会投射阴影。
 //
-// 顶点侧的来源索引：顶点色通道用 HmMeshMergeDecodeColorIndex 解码；
+// 顶点侧的网格索引：顶点色通道用 HmMeshMergeDecodeColorIndex 解码；
 // UV 通道直接写入整数，用 round(uv.x) 读取即可。
 //
-// 来源参数的读取：合并网格的顶点只带索引，各来源的颜色、阈值等数值写在查找纹理
+// 来源到网格的对应关系写在来源网格表里（横轴为来源索引，纵轴只有一行），
+// 用 HmMeshMergeLoadSourceMesh 取激活来源使用的网格索引，再和顶点上的网格索引比较。
+//
+// 来源参数的读取：合并网格的顶点只带网格索引，各来源的颜色、阈值等数值写在查找纹理
 // _HmMeshMergeParams 里（横轴为来源索引，纵轴为参数表的行），用 HmMeshMergeLoadParam
 // 取值；行号由合并资产的参数表记录，生成着色器的文件头会逐个列出。这张纹理与普通材质
-// 属性一样由使用者的着色器自己声明，取值时把纹理传进函数即可。
+// 属性一样由使用者的着色器自己声明，取值时把纹理传进函数即可。数值按激活来源索引读取，
+// 因此同一网格的不同材质组合各自保留自己的数值。
+//
+// 激活索引只在顶点着色器取一次，再用 nointerpolation 插值给片元：实例属性与
+// unity_ObjectToWorld._m33 都只在顶点阶段拿到本次绘制的值，片元里重新取值会读到别的实例。
 
-// 激活索引默认来自材质/实例属性 _MeshMergeIndex。
+// 激活索引默认来自材质/实例属性 _MeshMergeIndex，含义是来源索引（源列表下标，不是网格索引）。
 // 生成模板在 Properties 中声明该属性，可在材质面板或 MaterialPropertyBlock 中调整。
 // 默认实例属性声明不在 UnityPerMaterial 中，不承诺 SRP Batcher 兼容；集成方按自己的绘制路径声明。
 //
 // 可选定义 HM_MESH_MERGE_INDEX_FROM_MATRIX，从 unity_ObjectToWorld._m33 读取。
-// 这会改变标准仿射矩阵（索引 0 时矩阵奇异），仅适合已控制变换、逆矩阵和剔除逻辑的自定义路径。
+// 这会改变标准仿射矩阵（索引 0 时矩阵奇异），仅适合已控制变换、逆矩阵和剔除逻辑的自定义路径；
+// 该值同样是来源索引，可见性判断仍需先用来源网格表换成网格索引。
 // 不能把编码后的矩阵直接当作标准 TRS 用于任意 Unity 绘制 API。
 
 #if !defined(HM_MESH_MERGE_INDEX_FROM_MATRIX)
@@ -30,7 +39,7 @@ UNITY_INSTANCING_BUFFER_START(HmMeshMergeProps)
 UNITY_INSTANCING_BUFFER_END(HmMeshMergeProps)
 #endif
 
-// 取本次绘制要显示的来源索引。
+// 取本次绘制要显示的来源索引（源列表下标）。
 float HmMeshMergeGetActiveIndex()
 {
 #if defined(HM_MESH_MERGE_INDEX_FROM_MATRIX)
@@ -52,10 +61,18 @@ float HmMeshMergeDecodeUvIndex(float channelValue)
     return round(channelValue);
 }
 
-// 顶点的来源索引是否与激活索引一致；不一致的顶点应被移出裁剪空间。
-bool HmMeshMergeIsSourceVisible(float sourceIndex, float activeIndex)
+// 取某来源使用的网格索引：sourceTable 是合并工具写入的来源网格表（横轴为来源索引，
+// 纵轴只有一行），sourceIndex 是源列表下标。可见性判断先用它把激活来源换成网格索引，
+// 再与顶点上解出的网格索引比较。网格索引按网格在来源列表中首次出现的顺序从 0 开始。
+float HmMeshMergeLoadSourceMesh(Texture2D sourceTable, float sourceIndex)
 {
-    return abs(sourceIndex - activeIndex) < 0.5;
+    return sourceTable.Load(int3((int)round(sourceIndex), 0, 0)).x;
+}
+
+// 顶点的网格索引是否就是激活来源所用的网格；不一致的顶点应被移出裁剪空间。
+bool HmMeshMergeIsMeshVisible(float vertexMeshIndex, float activeMeshIndex)
+{
+    return abs(vertexMeshIndex - activeMeshIndex) < 0.5;
 }
 
 // 取某来源的一行参数：paramsTexture 是合并工具写入的参数查找纹理（横轴为来源索引，

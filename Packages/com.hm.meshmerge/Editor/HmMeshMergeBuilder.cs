@@ -13,6 +13,9 @@ namespace HmMeshMergeEditor
     /// <summary>校验配置，组织网格、纹理与 Shader 生成，并把结果写回配置资产。</summary>
     internal static class HmMeshMergeBuilder
     {
+        /// <summary>生成的来源网格表属性名；与生成 Shader 里的声明保持一致。</summary>
+        internal const string SOURCE_TABLE_NAME = "_HmMeshMergeSources";
+
         public static List<string> Validate(HmMeshMergeAsset asset)
         {
             var errors = new List<string>();
@@ -185,9 +188,9 @@ namespace HmMeshMergeEditor
                 return;
             }
 
-            if (asset.indexChannel == HmMeshMergeChannel.VertexColor && asset.Sources.Count > 256)
+            if (asset.indexChannel == HmMeshMergeChannel.VertexColor && CollectMeshes(asset.Sources).Count > 256)
             {
-                errors.Add("索引写入顶点色时来源数量不能超过 256。");
+                errors.Add("索引写入顶点色时网格数量不能超过 256。");
             }
 
             VertexAttribute attribute = asset.indexChannel == HmMeshMergeChannel.VertexColor
@@ -284,16 +287,19 @@ namespace HmMeshMergeEditor
             string folder = Path.GetDirectoryName(assetPath).Replace('\\', '/');
             string name = Path.GetFileNameWithoutExtension(assetPath);
             var sources = new List<HmMeshMergeSource>(asset.Sources);
+            List<Mesh> meshes = CollectMeshes(sources);
             Mesh mesh = null;
             Texture2D parameters = null;
+            Texture2D sourceTable = null;
             Material material = null;
             try
             {
                 List<HmMeshMergeTextureSet> sets = BuildTextureSets(asset, folder, name);
-                mesh = BuildMergedMesh(sources, asset.indexChannel, name);
+                mesh = BuildMergedMesh(meshes, asset.indexChannel, name);
                 parameters = HmMeshMergeParameterWriter.Build(sources, asset.Parameters);
-                Shader shader = ResolveOutputShader(asset, sources, sets, folder, name);
-                material = BuildMaterial(shader, sources[0].material, sets, parameters);
+                sourceTable = BuildSourceTable(sources, meshes);
+                Shader shader = ResolveOutputShader(asset, sources, meshes, sets, folder, name);
+                material = BuildMaterial(shader, sources[0].material, sets, parameters, sourceTable);
                 Mesh savedMesh = SaveMeshAsset(mesh, $"{folder}/{name}_Mesh.asset");
                 Texture2D savedParameters = HmMeshMergeParameterWriter.Save(parameters, name, folder);
                 if (material.HasProperty(HmMeshMergeParameterWriter.TEXTURE_NAME))
@@ -301,6 +307,7 @@ namespace HmMeshMergeEditor
                     material.SetTexture(HmMeshMergeParameterWriter.TEXTURE_NAME, savedParameters);
                 }
 
+                material.SetTexture(SOURCE_TABLE_NAME, SaveTextureAsset(sourceTable, $"{folder}/{name}_Sources.asset"));
                 Material savedMaterial = SaveMaterialAsset(material, $"{folder}/{name}_Material.mat");
                 asset.outputShader = shader;
                 asset.SetResult(savedMesh, savedMaterial);
@@ -317,6 +324,11 @@ namespace HmMeshMergeEditor
                 if (parameters != null && !AssetDatabase.Contains(parameters))
                 {
                     Object.DestroyImmediate(parameters);
+                }
+
+                if (sourceTable != null && !AssetDatabase.Contains(sourceTable))
+                {
+                    Object.DestroyImmediate(sourceTable);
                 }
 
                 if (material != null && !AssetDatabase.Contains(material))
@@ -396,7 +408,23 @@ namespace HmMeshMergeEditor
             return sets;
         }
 
-        private static Mesh BuildMergedMesh(List<HmMeshMergeSource> sources, HmMeshMergeChannel channel, string name)
+        /// <summary>按来源顺序收集去重后的网格；下标就是写进顶点的网格索引，同一个网格只出现一次。</summary>
+        private static List<Mesh> CollectMeshes(IReadOnlyList<HmMeshMergeSource> sources)
+        {
+            var meshes = new List<Mesh>();
+            foreach (HmMeshMergeSource source in sources)
+            {
+                if (source != null && source.mesh != null && !meshes.Contains(source.mesh))
+                {
+                    meshes.Add(source.mesh);
+                }
+            }
+
+            return meshes;
+        }
+
+        /// <summary>每个网格只写一份几何，顶点记录网格索引；来源与网格的对应关系写在来源网格表里。</summary>
+        private static Mesh BuildMergedMesh(List<Mesh> meshes, HmMeshMergeChannel channel, string name)
         {
             var vertices = new List<Vector3>();
             var normals = new List<Vector3>();
@@ -407,24 +435,24 @@ namespace HmMeshMergeEditor
             bool hasNormals = false;
             bool hasTangents = false;
             bool hasColors = false;
-            foreach (HmMeshMergeSource source in sources)
+            foreach (Mesh sourceMesh in meshes)
             {
-                hasNormals |= source.mesh.HasVertexAttribute(VertexAttribute.Normal);
-                hasTangents |= source.mesh.HasVertexAttribute(VertexAttribute.Tangent);
-                hasColors |= source.mesh.HasVertexAttribute(VertexAttribute.Color);
+                hasNormals |= sourceMesh.HasVertexAttribute(VertexAttribute.Normal);
+                hasTangents |= sourceMesh.HasVertexAttribute(VertexAttribute.Tangent);
+                hasColors |= sourceMesh.HasVertexAttribute(VertexAttribute.Color);
             }
 
-            for (int sourceIndex = 0; sourceIndex < sources.Count; sourceIndex++)
+            for (int meshIndex = 0; meshIndex < meshes.Count; meshIndex++)
             {
-                Mesh source = sources[sourceIndex].mesh;
+                Mesh sourceMesh = meshes[meshIndex];
                 int offset = vertices.Count;
-                vertices.AddRange(source.vertices);
-                Vector3[] sourceNormals = source.normals;
-                Vector4[] sourceTangents = source.tangents;
-                Color[] sourceColors = source.colors;
-                for (int i = 0; i < source.vertexCount; i++)
+                vertices.AddRange(sourceMesh.vertices);
+                Vector3[] sourceNormals = sourceMesh.normals;
+                Vector4[] sourceTangents = sourceMesh.tangents;
+                Color[] sourceColors = sourceMesh.colors;
+                for (int i = 0; i < sourceMesh.vertexCount; i++)
                 {
-                    indices.Add(new Vector2(sourceIndex, 0f));
+                    indices.Add(new Vector2(meshIndex, 0f));
                     if (hasNormals)
                     {
                         normals.Add(sourceNormals.Length > i ? sourceNormals[i] : Vector3.zero);
@@ -441,7 +469,7 @@ namespace HmMeshMergeEditor
                     }
                 }
 
-                foreach (int index in source.triangles)
+                foreach (int index in sourceMesh.triangles)
                 {
                     triangles.Add(offset + index);
                 }
@@ -470,7 +498,7 @@ namespace HmMeshMergeEditor
                     mesh.SetColors(colors);
                 }
 
-                CopyUvChannels(sources, mesh);
+                CopyUvChannels(meshes, mesh);
                 if (channel == HmMeshMergeChannel.VertexColor)
                 {
                     var indexColors = new Color32[indices.Count];
@@ -497,17 +525,17 @@ namespace HmMeshMergeEditor
             }
         }
 
-        private static void CopyUvChannels(List<HmMeshMergeSource> sources, Mesh target)
+        private static void CopyUvChannels(List<Mesh> meshes, Mesh target)
         {
             for (int channel = 0; channel < 8; channel++)
             {
                 var attribute = (VertexAttribute)((int)VertexAttribute.TexCoord0 + channel);
                 int dimension = 0;
-                foreach (HmMeshMergeSource source in sources)
+                foreach (Mesh sourceMesh in meshes)
                 {
-                    if (source.mesh.HasVertexAttribute(attribute))
+                    if (sourceMesh.HasVertexAttribute(attribute))
                     {
-                        dimension = Mathf.Max(dimension, source.mesh.GetVertexAttributeDimension(attribute));
+                        dimension = Mathf.Max(dimension, sourceMesh.GetVertexAttributeDimension(attribute));
                     }
                 }
 
@@ -518,11 +546,11 @@ namespace HmMeshMergeEditor
 
                 var values = new List<Vector4>();
                 var sourceValues = new List<Vector4>();
-                foreach (HmMeshMergeSource source in sources)
+                foreach (Mesh sourceMesh in meshes)
                 {
                     sourceValues.Clear();
-                    source.mesh.GetUVs(channel, sourceValues);
-                    for (int i = 0; i < source.mesh.vertexCount; i++)
+                    sourceMesh.GetUVs(channel, sourceValues);
+                    for (int i = 0; i < sourceMesh.vertexCount; i++)
                     {
                         values.Add(i < sourceValues.Count ? sourceValues[i] : Vector4.zero);
                     }
@@ -543,8 +571,36 @@ namespace HmMeshMergeEditor
             }
         }
 
+        /// <summary>来源网格表：横轴为来源索引，纵轴一行，x 为该来源使用的网格索引。按整数坐标读取，不做过滤。</summary>
+        private static Texture2D BuildSourceTable(List<HmMeshMergeSource> sources, List<Mesh> meshes)
+        {
+            var pixels = new Color[sources.Count];
+            for (int i = 0; i < sources.Count; i++)
+            {
+                pixels[i] = new Color(meshes.IndexOf(sources[i].mesh), 0f, 0f, 0f);
+            }
+
+            var texture = new Texture2D(sources.Count, 1, TextureFormat.RGBAFloat, false, true)
+            {
+                name = "Sources",
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            try
+            {
+                texture.SetPixels(pixels);
+                texture.Apply(false, false);
+                return texture;
+            }
+            catch
+            {
+                Object.DestroyImmediate(texture);
+                throw;
+            }
+        }
+
         private static Shader ResolveOutputShader(HmMeshMergeAsset asset, List<HmMeshMergeSource> sources,
-            List<HmMeshMergeTextureSet> sets, string folder, string name)
+            List<Mesh> meshes, List<HmMeshMergeTextureSet> sets, string folder, string name)
         {
             string path = $"{folder}/{name}_Shader.shader";
             if (asset.outputShader != null && AssetDatabase.GetAssetPath(asset.outputShader) != path)
@@ -553,7 +609,7 @@ namespace HmMeshMergeEditor
             }
 
             string guid = AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(asset));
-            File.WriteAllText(path, HmMeshMergeShaderWriter.Write(sources, asset.Parameters, sets,
+            File.WriteAllText(path, HmMeshMergeShaderWriter.Write(sources, meshes, asset.Parameters, sets,
                 asset.indexChannel, $"HmMeshMerge/{name}_{guid}"));
             AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
             Shader shader = AssetDatabase.LoadAssetAtPath<Shader>(path);
@@ -566,7 +622,7 @@ namespace HmMeshMergeEditor
         }
 
         private static Material BuildMaterial(Shader shader, Material source,
-            List<HmMeshMergeTextureSet> sets, Texture2D parameters)
+            List<HmMeshMergeTextureSet> sets, Texture2D parameters, Texture2D sourceTable)
         {
             if (ShaderUtil.ShaderHasError(shader))
             {
@@ -605,6 +661,15 @@ namespace HmMeshMergeEditor
                     material.SetTexture(HmMeshMergeParameterWriter.TEXTURE_NAME, parameters);
                 }
 
+                int sourceTableIndex = shader.FindPropertyIndex(SOURCE_TABLE_NAME);
+                if (sourceTableIndex < 0 ||
+                    shader.GetPropertyType(sourceTableIndex) != ShaderPropertyType.Texture ||
+                    shader.GetPropertyTextureDimension(sourceTableIndex) != TextureDimension.Tex2D)
+                {
+                    throw new InvalidOperationException($"输出 Shader 必须声明 2D 贴图属性 {SOURCE_TABLE_NAME}。");
+                }
+
+                material.SetTexture(SOURCE_TABLE_NAME, sourceTable);
                 return material;
             }
             catch
@@ -703,6 +768,21 @@ namespace HmMeshMergeEditor
             }
 
             EditorUtility.CopySerialized(material, existing);
+            EditorUtility.SetDirty(existing);
+            return existing;
+        }
+
+        private static Texture2D SaveTextureAsset(Texture2D texture, string path)
+        {
+            texture.name = Path.GetFileNameWithoutExtension(path);
+            Texture2D existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (existing == null)
+            {
+                AssetDatabase.CreateAsset(texture, path);
+                return texture;
+            }
+
+            EditorUtility.CopySerialized(texture, existing);
             EditorUtility.SetDirty(existing);
             return existing;
         }

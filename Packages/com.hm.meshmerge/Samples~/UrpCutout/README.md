@@ -1,8 +1,10 @@
 ﻿# URP Cutout 参考 Shader
 
-示例默认用 _MeshMergeIndex 材质/实例属性选择来源，用 UV3（TEXCOORD3）读取顶点来源索引。普通 MeshRenderer 可直接在材质面板中切换索引。
+示例默认用 _MeshMergeIndex 材质/实例属性选择来源，用 UV3（TEXCOORD3）读取顶点网格索引。普通 MeshRenderer 可直接在材质面板中切换索引。
 
-_BaseMap 必须绑定 Texture2DArray。LUT 的 **第 0 行作为 RGBA 颜色、第 1 行作为 Cutoff** 仅为示例约定；必须按实际配置表修改两处 Load 行号，并启用对应参数。本示例不会自动知道配置表，也不会自动升级普通 2D 贴图为数组；请优先复制工具为实际资产生成的读取函数。
+合并网格里同一个网格只存一份几何，所以顶点上的索引是网格索引；顶点着色器先用 _HmMeshMergeSources（来源网格表）把激活来源换成网格索引再判断可见性，两个属性都必须由材质绑定，示例的 Properties 已声明。激活来源索引只在顶点着色器取一次并插值给片元，片元不再重新取值。
+
+_BaseMap 必须绑定 Texture2DArray。LUT 的 **第 0 行作为 RGBA 颜色、第 1 行作为 Cutoff** 仅为示例约定；必须按实际配置表修改两处 Load 行号，并启用对应参数。数组层号与这两处 Load 都按激活来源索引取，因此同一个网格配不同材质时各自的颜色、裁剪与贴图互不串用。本示例不会自动知道配置表，也不会自动升级普通 2D 贴图为数组；请优先复制工具为实际资产生成的读取函数。
 
 ForwardLit、ShadowCaster、DepthOnly 都处理来源选择和 Alpha 裁剪。示例保留简单 URP 光照，工具生成的模板则为无光照。
 

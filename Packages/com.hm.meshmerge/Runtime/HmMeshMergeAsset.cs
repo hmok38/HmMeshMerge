@@ -5,7 +5,8 @@ namespace HmMeshMerge
 {
     /// <summary>
     /// 一次网格合并的结果与配方，由合并工具写入，运行时只读。
-    /// 源列表的下标与合并网格顶点上的来源索引一致；使用方按该下标传入激活索引。
+    /// 源是「网格 + 材质」的组合，列表下标即来源索引；使用方按该下标传入激活索引。
+    /// 同一个网格被多个来源引用时几何只存一份，顶点上写的是网格索引，两者由生成的来源网格表对应。
     /// </summary>
     public sealed class HmMeshMergeAsset : ScriptableObject
     {
@@ -34,13 +35,13 @@ namespace HmMeshMerge
         /// <summary>参数表：属性名与它在参数纹理里的行号。行号稳定，移除的参数保留为空行。</summary>
         public IReadOnlyList<HmMeshMergeParameterEntry> Parameters => _parameters;
 
-        /// <summary>合并后的网格；保留源顶点数据并新增来源索引。</summary>
+        /// <summary>合并后的网格；保留源顶点数据、按网格去重，并新增网格索引。</summary>
         public Mesh MergedMesh => _mergedMesh;
 
         /// <summary>合并后的材质：挂载各贴图属性的合并结果与参数查找纹理。</summary>
         public Material Material => _material;
 
-        /// <summary>来源数量；顶点色作索引通道时不超过 256。</summary>
+        /// <summary>来源数量；顶点色作索引通道时受 256 个网格的限制，与来源数无直接关系。</summary>
         public int SourceCount => _sources.Count;
 
         /// <summary>替换参数表；由工具在首次填表或重排时调用。</summary>

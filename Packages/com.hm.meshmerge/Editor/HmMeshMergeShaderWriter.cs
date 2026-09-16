@@ -12,13 +12,14 @@ namespace HmMeshMergeEditor
     /// <summary>生成 URP 无光照展示与逐属性接入模板；不改写源 Shader。</summary>
     internal static class HmMeshMergeShaderWriter
     {
-        public static string Write(List<HmMeshMergeSource> sources, IReadOnlyList<HmMeshMergeParameterEntry> table,
-            List<HmMeshMergeTextureSet> textureSets, HmMeshMergeChannel channel, string shaderName)
+        public static string Write(List<HmMeshMergeSource> sources, List<Mesh> meshes,
+            IReadOnlyList<HmMeshMergeParameterEntry> table, List<HmMeshMergeTextureSet> textureSets,
+            HmMeshMergeChannel channel, string shaderName)
         {
             Material source = sources[0].material;
             Shader shader = source.shader;
             var text = new StringBuilder();
-            WriteHeader(text, sources, table);
+            WriteHeader(text, sources, meshes, table);
             text.AppendLine($"Shader \"{Escape(shaderName)}\"");
             text.AppendLine("{");
             WriteProperties(text, source, textureSets);
@@ -31,6 +32,7 @@ namespace HmMeshMergeEditor
         #include ""Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl""");
             text.AppendLine($"        #include \"{RuntimeIncludePath()}\"");
             text.AppendLine("        TEXTURE2D(_HmMeshMergeParams);");
+            text.AppendLine("        TEXTURE2D(_HmMeshMergeSources);");
             WriteDeclarations(text, shader, textureSets);
             WriteAccessors(text, shader, table, textureSets);
             WriteVertexCode(text, channel);
@@ -67,20 +69,29 @@ namespace HmMeshMergeEditor
             return $"{package.assetPath.TrimEnd('/')}/Runtime/HmMeshMerge.hlsl";
         }
 
-        private static void WriteHeader(StringBuilder text, List<HmMeshMergeSource> sources,
+        private static void WriteHeader(StringBuilder text, List<HmMeshMergeSource> sources, List<Mesh> meshes,
             IReadOnlyList<HmMeshMergeParameterEntry> table)
         {
             text.AppendLine("// HmMeshMergeShaderWriter 生成；输入为合并配置。下次合并会覆盖，请复制到自有 Shader 后修改。");
             text.AppendLine("// 包含路径按本工程实际安装的包位置生成；复制到其他工程时按该工程的包路径修改。");
-            text.AppendLine("// 复制对应 Properties、纹理声明、HmRead/HmSample 函数和索引判断到自有 Shader。");
+            text.AppendLine("// 复制对应 Properties、纹理声明、HmRead/HmSample 函数和索引判断到自有 Shader；索引判断依赖 _HmMeshMergeSources。");
             text.AppendLine("// 数值函数直接返回正确的标量/向量；启用行走 LUT，其他参数使用第一来源的普通材质属性。");
             text.AppendLine("// _ST 函数返回各贴图的 Tiling.xy 和 Offset.zw，网格 UV 本身未改变。");
             text.AppendLine("// 模板基于 URP；其他管线保留数据契约，替换管线相关宏、变换和 Pass。");
             text.AppendLine("// 本模板只展示主贴图、主颜色、Alpha 裁剪，不模拟任意源 Shader 的完整效果。");
-            text.AppendLine("// 默认激活索引是材质/实例属性 _MeshMergeIndex；生成模板不保证 SRP Batcher 兼容。");
+            text.AppendLine("// 默认激活索引是材质/实例属性 _MeshMergeIndex，含义是来源索引；不保证 SRP Batcher 兼容。");
+            text.AppendLine("// 同一个网格被多个来源使用时只存一份几何，顶点上写的是网格索引。");
+            text.AppendLine("// 来源到网格的对应关系在 _HmMeshMergeSources（横轴为来源索引，纵轴一行）；");
+            text.AppendLine("// 数值与纹理数组层号都按激活来源索引读取，因此同一网格的不同材质组合各自保留自己的数值。");
+            for (int i = 0; i < meshes.Count; i++)
+            {
+                text.AppendLine($"// 网格 {i}: {Comment(meshes[i].name)}；来源 {SourcesOfMesh(sources, meshes, i)}");
+            }
+
             for (int i = 0; i < sources.Count; i++)
             {
-                text.AppendLine($"// 来源 {i}: {Comment(sources[i].mesh.name)} / {Comment(sources[i].material.name)}");
+                text.AppendLine($"// 来源 {i}: {Comment(sources[i].mesh.name)} / {Comment(sources[i].material.name)}；" +
+                    $"网格 {meshes.IndexOf(sources[i].mesh)}");
             }
 
             foreach (HmMeshMergeParameterEntry entry in table)
@@ -90,12 +101,28 @@ namespace HmMeshMergeEditor
             }
         }
 
+        /// <summary>某个网格被哪些来源使用；只用于生成的文件头注释。</summary>
+        private static string SourcesOfMesh(List<HmMeshMergeSource> sources, List<Mesh> meshes, int meshIndex)
+        {
+            var indices = new List<string>();
+            for (int i = 0; i < sources.Count; i++)
+            {
+                if (meshes.IndexOf(sources[i].mesh) == meshIndex)
+                {
+                    indices.Add(i.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            return string.Join("、", indices);
+        }
+
         private static void WriteProperties(StringBuilder text, Material source, List<HmMeshMergeTextureSet> sets)
         {
             text.AppendLine("    Properties");
             text.AppendLine("    {");
             text.AppendLine("        _MeshMergeIndex(\"来源索引\", Float) = 0");
             text.AppendLine("        _HmMeshMergeParams(\"来源参数 LUT\", 2D) = \"black\" {}");
+            text.AppendLine("        _HmMeshMergeSources(\"来源网格表\", 2D) = \"black\" {}");
             Shader shader = source.shader;
             for (int i = 0; i < shader.GetPropertyCount(); i++)
             {
@@ -181,6 +208,8 @@ namespace HmMeshMergeEditor
         {
             text.AppendLine();
             text.AppendLine("        // 以下函数可直接复制。调用示例：HmRead_BaseColor(sourceIndex)、HmSample_BaseMap(uv, sourceIndex)。");
+            text.AppendLine("        // sourceIndex 用顶点着色器取到的激活来源索引：片元里不要再取一遍激活索引，");
+            text.AppendLine("        // 实例属性与矩阵 m33 只在顶点阶段有效。数值与纹理数组层号都按它读取。");
             for (int i = 0; i < shader.GetPropertyCount(); i++)
             {
                 string name = shader.GetPropertyName(i);
@@ -244,7 +273,7 @@ namespace HmMeshMergeEditor
                 }
             }
 
-            text.AppendLine($"        // 源属性 {name}；" + (row >= 0 ? $"LUT 第 {row} 行。" : "普通材质属性。"));
+            text.AppendLine($"        // 源属性 {name}；" + (row >= 0 ? $"LUT 第 {row} 行，按来源索引取。" : "普通材质属性。"));
             text.AppendLine($"        {ValueType(type)} HmRead{name}(float sourceIndex) {{ return {expression}; }}");
         }
 
@@ -253,13 +282,13 @@ namespace HmMeshMergeEditor
             string type = channel == HmMeshMergeChannel.VertexColor ? "float4" : "float2";
             string semantic = channel == HmMeshMergeChannel.VertexColor ? "COLOR" : "TEXCOORD" + (int)channel;
             string decode = channel == HmMeshMergeChannel.VertexColor
-                ? "HmMeshMergeDecodeColorIndex(input.sourceIndex.r)" : "HmMeshMergeDecodeUvIndex(input.sourceIndex.x)";
+                ? "HmMeshMergeDecodeColorIndex(input.meshIndex.r)" : "HmMeshMergeDecodeUvIndex(input.meshIndex.x)";
             text.AppendLine(@"        struct Attributes
         {
             float4 positionOS : POSITION;
             float3 normalOS : NORMAL;
             float2 uv : TEXCOORD0;");
-            text.AppendLine($"            {type} sourceIndex : {semantic};");
+            text.AppendLine($"            {type} meshIndex : {semantic};");
             text.AppendLine(@"            UNITY_VERTEX_INPUT_INSTANCE_ID
         };
         struct Varyings
@@ -275,9 +304,12 @@ namespace HmMeshMergeEditor
             output = (Varyings)0;
             UNITY_SETUP_INSTANCE_ID(input);
             output.positionCS = float4(2.0, 2.0, 2.0, 1.0);");
-            text.AppendLine($"            output.sourceIndex = {decode};");
-            text.AppendLine(@"            if (!HmMeshMergeIsSourceVisible(output.sourceIndex, HmMeshMergeGetActiveIndex()))
-            {
+            text.AppendLine("            // 激活索引是来源索引：顶点侧用它换出网格索引判断可见性，再插值给片元按来源取数值。");
+            text.AppendLine("            float activeIndex = HmMeshMergeGetActiveIndex();");
+            text.AppendLine("            output.sourceIndex = activeIndex;");
+            text.AppendLine("            float activeMeshIndex = HmMeshMergeLoadSourceMesh(_HmMeshMergeSources, activeIndex);");
+            text.AppendLine($"            if (!HmMeshMergeIsMeshVisible({decode}, activeMeshIndex))");
+            text.AppendLine(@"            {
                 return false;
             }
             output.positionWS = TransformObjectToWorld(input.positionOS.xyz);

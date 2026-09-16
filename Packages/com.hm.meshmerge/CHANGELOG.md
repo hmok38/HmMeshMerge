@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- 修复重复几何：按引用对来源网格去重，同一个网格在合并网格里只保留一份顶点与三角形，不再随材质组合重复；顶点索引通道改存网格索引，新增来源网格表 `_Sources.asset`（Shader 侧 `_HmMeshMergeSources`）记录来源索引到网格索引的映射。
+- 参数 LUT 的行、纹理数组的层号改按激活来源索引（_MeshMergeIndex，顶点侧取一次后以 nointerpolation 插值给片元）读取，不再使用顶点上的网格索引，因此同一网格搭配不同材质时各自的数值与贴图互不串用。
+- 生成模板与示例同步：顶点着色器先用 `HmMeshMergeLoadSourceMesh` 把激活来源换成网格索引，再调用 `HmMeshMergeIsMeshVisible`；`HmMeshMergeIsSourceVisible` 已移除。自有 Shader 需要同步改名，并保证传入的是网格索引。
+- 输出 Shader 必须声明 2D 属性 `_HmMeshMergeSources`，否则合并报错；生成的材质会自动绑定该来源网格表。
 - 包名统一为 `com.hm.meshmerge`，与包目录 `Packages/com.hm.meshmerge` 一致；作者署名改为 `huangmin`。已安装该包的工程（如 HmSlgGame）需要把依赖名从 `com.huangmin.meshmerge` 改为 `com.hm.meshmerge` 后再更新包。
 - 修复在 git 或本地安装该包时生成 Shader 无法包含 HmMeshMerge.hlsl 的报错：模板不再写死包路径，改为按工具所在工程解析出的包路径生成；示例 Shader 与文档同步使用实际包名。
 - 排除由管线提供的 unity_ 内置属性，修复 unity_Lightmaps 重复声明；输出 Shader 已报错时停止绑定材质。

@@ -13,7 +13,7 @@
 
 初版插件由其他 AI 开发。用户认为实现存在问题，要求接手、优化和重构。
 
-插件的目标是：把多个共享同一 Shader 的模型合并为一个 Mesh 和一个材质，在顶点中记录来源索引，绘制时只显示指定来源。这样可以为调用方组织不同模型品种的实例合批提供统一的 Mesh 与 Material。
+插件的目标是：把多个共享同一 Shader 的模型合并为一个 Mesh 和一个材质，在顶点中记录网格索引，来源到网格的映射写在来源网格表里，绘制时只显示指定来源。这样可以为调用方组织不同模型品种的实例合批提供统一的 Mesh 与 Material。
 
 **合并资源本身不等于已经降低 draw call。** 调用方仍需把使用相同合并资源的实例组织到同一批次。插件不提供渲染器、批次管理、实例剔除或宿主游戏接入。
 
@@ -25,11 +25,12 @@
 | 程序集与命名空间 | Runtime 为 HmMeshMerge，Editor 为 HmMeshMergeEditor，均使用同名单层命名空间 |
 | 输入 | 多组 Mesh + Material；所有来源使用同一个 Shader |
 | 输出 | 一个合并 Mesh、一个材质，以及按需生成的纹理数组、参数 LUT 和专用 Shader |
-| 网格新增数据 | 只新增来源索引，不再写入外观参数 |
+| 网格新增数据 | 只新增网格索引，不再写入外观参数；同一网格被多个来源引用时几何只存一份 |
 | 默认索引通道 | UV3，即零基编号的 TEXCOORD3；可选择其他支持的空闲通道 |
 | 源网格数据 | 保留已有 UV、顶点色等数据，避免破坏依赖这些通道的动画 |
 | 数值参数 | 写入 _HmMeshMergeParams；横轴为来源索引，纵轴为参数表行号 |
 | 贴图 | 使用 Texture2DArray，层号等于来源索引，网格 UV 不重映射 |
+| 来源与网格 | 来源是「网格 + 材质」的组合；网格按引用去重，来源索引到网格索引的映射写在 _Sources.asset |
 | 数组资产生成 | 使用 .hmtexarray ScriptedImporter；不保留 flipbook 路径 |
 | 参数候选 | 列出源 Shader 的普通材质属性；插件不能判断某属性是否被 Shader 代码实际使用 |
 | 首次参数表 | 各来源取值不同的排前并启用；取值相同的排后并停用 |
@@ -98,10 +99,10 @@ Editor 程序集只包含 Editor 平台，引用 Runtime。本轮沿用已有职
 3. **首次初始化参数表**：参数表为空时，BuildInitialTable 按源材质差异填表，再次执行完整校验。
 4. **生成纹理数组**：BuildTextureSets 创建或更新 .hmtexarray 的导入器引用列表，由用户触发的合并流程调用 SaveAndReimport。
 5. **检查数组导入结果**：读取导入日志；存在错误即停止，避免把旧产物或失败状态当作成功。
-6. **合并几何**：BuildMergedMesh 拼接顶点与三角形，CopyUvChannels 保留 UV 数据，再写入来源索引。
+6. **合并几何**：CollectMeshes 按引用去重来源网格，BuildMergedMesh 拼接去重后的顶点与三角形，CopyUvChannels 保留 UV 数据，再写入网格索引。
 7. **生成数值 LUT**：ParameterWriter.Build 根据已启用数值行生成纹理，没有需要写入的数值时返回 null。
 8. **确定输出 Shader**：ResolveOutputShader 使用用户指定的自定义 Shader，或更新默认生成文件并加载。
-9. **构造材质**：BuildMaterial 先检查输出 Shader 是否已有错误，再复制普通属性、绑定数组和 LUT。
+9. **构造材质**：BuildMaterial 先检查输出 Shader 是否已有错误，再复制普通属性、绑定数组、LUT 和来源网格表。
 10. **保存与发布**：保存 Mesh、LUT、Material，最后回填配置结果并保存资产。
 11. **释放临时资源**：成功或失败均通过 finally 清理尚未交给资产库持有的对象。
 
@@ -111,7 +112,9 @@ Editor 程序集只包含 Editor 平台，引用 Runtime。本轮沿用已有职
 
 ### 来源与坐标
 
-- 来源索引取配置 Sources 的列表下标。
+- 来源索引取配置 Sources 的列表下标；来源是「网格 + 材质」的组合。
+- 网格按引用去重：同一个 Mesh 被多个来源引用时只写一份顶点与三角形，网格索引按首次出现的次序从 0 开始。
+- 来源网格表把来源索引映射到网格索引（宽为来源数、高 1 的 RGBAFloat 贴图），Shader 侧用它换算后再判断可见性。
 - 顶点保留每个源 Mesh 的局部坐标，不读取场景 Transform，不做空间排列或位置偏移。
 - 每个来源的三角形索引加上此前已累计的顶点数，最终合并为一个子网格。
 - 支持一个来源包含多个三角形子网格，但它们统一使用该来源提供的一个材质。
@@ -121,7 +124,7 @@ Editor 程序集只包含 Editor 平台，引用 Runtime。本轮沿用已有职
 - 保留已有 Position、Normal、Tangent、Color 和 UV0–UV7 的值。
 - UV 按各来源中的最大维度合并；缺失 UV、法线、切线的数据补零，缺失顶点色补白。
 - 索引通道必须在所有来源上都未被占用；冲突即报错。
-- UV 索引存入 float2 的 x 分量；顶点色索引存入 Color32.r，并在 Shader 中乘 255 解码。
+- UV 通道存入 float2 的 x 分量；顶点色通道存入 Color32.r，并在 Shader 中乘 255 解码：两者存的都是网格索引。
 - 顶点数超过 65535 时使用 UInt32，否则使用 UInt16。
 
 这不是顶点缓冲区逐字节复制：通道存储格式可能变化，合并后顶点编号也会变化。依赖源顶点 ID 的动画不能仅靠保留 UV/颜色保证兼容。缺失法线时不会自动生成法线。
@@ -161,7 +164,7 @@ Editor 程序集只包含 Editor 平台，引用 Runtime。本轮沿用已有职
 | Integer | 转为 float 无法精确表示时明确报错 |
 | 读取 | HmMeshMergeLoadParam 使用整数坐标 Load |
 
-来源数量受 2048 与当前设备最大纹理尺寸限制；顶点色模式另限 256 个来源。参数行号也检查上限、重复和合法性。
+来源数量受 2048 与当前设备最大纹理尺寸限制；顶点色模式按去重后的网格数另限 256。参数行号也检查上限、重复和合法性。
 
 ## 七、纹理数组与导入依赖
 
@@ -211,7 +214,8 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 
 - 启用数值的 HmRead 函数直接包含实际 LUT 行号，并返回对应标量或向量。
 - 停用数值的函数返回普通材质属性，值来自第一来源。
-- HmSample 按属性维度生成采样；转换为二维数组的属性用来源索引选择层。
+- HmSample 按属性维度生成采样；转换为二维数组的属性用激活来源索引（_MeshMergeIndex）选择层，与顶点上的网格索引无关。该索引只在顶点着色器取一次并以 nointerpolation 插值给片元，避免片元重复读取实例属性或 m33。
+- 数值访问器同样按激活来源索引取 LUT 行，因此同一网格搭配不同材质时各自的数值与贴图互不串用。
 - 二维贴图采样前应用其 _ST；网格 UV 不被改写。
 
 ### 基础显示
@@ -219,7 +223,7 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 - 主贴图、主颜色优先按 MainTexture / MainColor 标记识别，后备为 _BaseMap / _MainTex、_BaseColor / _Color。
 - 不再把参数表中第一个启用数值当作颜色。
 - 存在 _Cutoff 时示范 Alpha 裁剪；有 _AlphaClip 时受其控制。
-- 来源选择和 Alpha 裁剪同时用于显示、阴影和深度。
+- 来源选择和 Alpha 裁剪同时用于显示、阴影和深度；顶点着色器先用 HmMeshMergeLoadSourceMesh 把激活来源换成网格索引，再用 HmMeshMergeIsMeshVisible 判断。
 - 阴影代码包含方向光以及点光/聚光灯分支与近裁剪面处理。
 
 模板不还原源 Shader 的完整光照、透明混合、法线解码、动画或专有效果。主贴图、颜色和裁剪参数仍是普通参数表项，没有恢复为独立配置字段。
@@ -269,6 +273,7 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 | 2DArray 赋给 2D 的错误 | 生成 _BaseMap 已声明为 2DArray，但日志更早报 unity_Lightmaps 重复声明、Shader 编译失败 | 排除管线内置属性；Shader 报错时停止；材质按类型复制并跳过数组槽位的源 2D 贴图 | 源码已修改，需重新生成后验证 |
 | Shader 混用换行 | 当时生成文件含 301 处 CRLF 与 126 处独立 LF | Write 返回前统一为 LF | C# 语法与差异检查通过，等待用户重新生成确认 |
 | HmSlgGame 中生成 Shader 报 Couldn't open include file 'Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl' | HmSlgGame 用 git URL 安装该包，包按当时 package.json 的 name（com.huangmin.meshmerge）落到 Library/PackageCache，可解析的路径只有 Packages/com.huangmin.meshmerge；而生成模板写死的 com.hm.meshmerge 只对应本工程里嵌入目录的物理名 | 模板改为生成时用 PackageInfo.FindForAssembly 解析实际包路径；随后按用户决定把包名改回 com.hm.meshmerge，与目录名统一 | 源码已修改，等待用户在 HmSlgGame 更新包后重新合并验证 |
+| 合并后的网格没有去重，同一网格的顶点与三角形重复出现 | 原实现按来源逐个拼接几何；来源是「网格 + 材质」的组合，mesh a、mesh b 与 material a、material b 交叉组合时 mesh a 与 mesh b 各出现两次 | 按引用对来源网格去重，顶点通道改存网格索引；新增来源网格表 _Sources.asset（Shader 侧 _HmMeshMergeSources）记录来源索引到网格索引的映射；参数 LUT 行与纹理数组层号改按激活来源索引读取，避免改索引语义后同一网格的不同材质组合串用数值与贴图 | 源码已修改，等待用户重新合并后验证重复几何与逐来源切换 |
 
 上述“源码已修改”不等于用户已经确认问题消失。特别是材质维度错误的最终运行结果，不能仅凭修复代码推断已通过。
 
@@ -296,7 +301,7 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 
 1. 等待脚本编译完成，在原配置上刷新属性并确认启用项，再执行合并。
 2. 检查 Console 首条错误，确认生成 Shader 无重复声明、维度和混合换行问题。
-3. 使用普通 MeshRenderer 切换 _MeshMergeIndex，核对每个来源显示正确。
+3. 使用普通 MeshRenderer 切换 _MeshMergeIndex，核对每个来源显示正确；同时检查合并 Mesh 的顶点数等于去重后各网格顶点数之和，来源交叉组合时不再重复。
 4. 检查颜色、负数、大于 1 的数值、ST，以及参数停用、追加和显式重排。
 5. 检查 Alpha 裁剪在显示、阴影与深度中的一致性。
 6. 修改来源后再次合并，确认未删除重建的 Mesh 与 Material 引用保持。

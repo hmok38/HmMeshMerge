@@ -1,10 +1,11 @@
 ﻿// HmMeshMerge 参考着色器（URP，Alpha 裁剪）。
+// 合并网格里同一个网格只存一份几何，顶点上带的是网格索引；来源索引（源列表下标）由本次绘制决定。
 // 展示三处接入点：
-//   1. 顶点着色器按来源索引隐藏不需要的来源；
-//   2. 贴图走纹理数组，层号即来源索引，UV 原样采样；
+//   1. 顶点着色器用来源网格表把激活来源换成网格索引，隐藏不属于该网格的顶点；
+//   2. 贴图走纹理数组，层号即激活来源索引，UV 原样采样；
 //   3. 各来源的颜色与裁剪阈值来自参数查找纹理 _HmMeshMergeParams，
-//      用 HmMeshMerge.hlsl 的 HmMeshMergeLoadParam 按参数表行号取，不做材质参数。
-// 索引默认来自材质/实例属性 _MeshMergeIndex，适合先用普通 MeshRenderer 验证。
+//      用 HmMeshMerge.hlsl 的 HmMeshMergeLoadParam 按激活来源索引和参数表行号取，不做材质参数。
+// 激活索引默认来自材质/实例属性 _MeshMergeIndex，含义是来源索引，适合先用普通 MeshRenderer 验证。
 Shader "HmMeshMerge/URP Cutout"
 {
     Properties
@@ -13,6 +14,8 @@ Shader "HmMeshMerge/URP Cutout"
         _BaseMap("Base Map", 2DArray) = "" {}
         // 参数查找纹理必须在 Properties 里声明，材质才能绑定：合并工具生成的材质会把它设进来。
         _HmMeshMergeParams("Params", 2D) = "white" {}
+        // 来源网格表同样要在 Properties 里声明，合并工具生成的材质会把它设进来。
+        _HmMeshMergeSources("Sources", 2D) = "black" {}
     }
 
     SubShader
@@ -30,13 +33,15 @@ Shader "HmMeshMerge/URP Cutout"
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
 
-        // HmMeshMergeLoadParam 由该文件提供；查找纹理和普通材质属性一样要自己声明。
+        // HmMeshMergeLoadSourceMesh、HmMeshMergeIsMeshVisible 与 HmMeshMergeLoadParam 由该文件提供；
+        // 两张查找纹理和普通材质属性一样要自己声明。
         // 路径固定为包名 com.hm.meshmerge；改包名后必须同步修改（工具生成的模板按实际安装位置写入）。
         #include "Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl"
 
         TEXTURE2D_ARRAY(_BaseMap);
         SAMPLER(sampler_BaseMap);
         TEXTURE2D(_HmMeshMergeParams);
+        TEXTURE2D(_HmMeshMergeSources);
 
         struct Attributes
         {
@@ -44,8 +49,9 @@ Shader "HmMeshMerge/URP Cutout"
             float3 normalOS : NORMAL;
             float2 uv : TEXCOORD0;
             // 索引通道，要与合并资产里的「索引通道」设置一致：这里是默认的 UV3。
-            // 选顶点色通道时改成 float4 sourceIndex : COLOR; 并用 HmMeshMergeDecodeColorIndex 解码。
-            float2 sourceIndex : TEXCOORD3;
+            // 里面是网格索引（去重后的第几个网格），不是来源索引。
+            // 选顶点色通道时改成 float4 meshIndex : COLOR; 并用 HmMeshMergeDecodeColorIndex 解码。
+            float2 meshIndex : TEXCOORD3;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
 
@@ -55,11 +61,13 @@ Shader "HmMeshMerge/URP Cutout"
             float3 positionWS : TEXCOORD0;
             half3 normalWS : TEXCOORD1;
             float2 uv : TEXCOORD2;
+            // 顶点侧取到的激活来源索引：片元里不要再取一遍，实例属性与矩阵 m33 只在顶点阶段有效。
             nointerpolation float sourceIndex : TEXCOORD3;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
 
         // 判断本顶点是否属于本次绘制要显示的来源；被隐藏时顶点移出裁剪空间，三角形整体被裁剪。
+        // 激活索引是来源索引，先用来源网格表换成网格索引，再和顶点上的网格索引比较。
         bool PrepareVertex(Attributes input, out Varyings output)
         {
             output = (Varyings)0;
@@ -67,8 +75,10 @@ Shader "HmMeshMerge/URP Cutout"
             UNITY_TRANSFER_INSTANCE_ID(input, output);
             output.positionCS = float4(2.0, 2.0, 2.0, 1.0);
 
-            output.sourceIndex = HmMeshMergeDecodeUvIndex(input.sourceIndex.x);
-            if (!HmMeshMergeIsSourceVisible(output.sourceIndex, HmMeshMergeGetActiveIndex()))
+            float activeIndex = HmMeshMergeGetActiveIndex();
+            output.sourceIndex = activeIndex;
+            float activeMeshIndex = HmMeshMergeLoadSourceMesh(_HmMeshMergeSources, activeIndex);
+            if (!HmMeshMergeIsMeshVisible(HmMeshMergeDecodeUvIndex(input.meshIndex.x), activeMeshIndex))
             {
                 return false;
             }
@@ -80,6 +90,7 @@ Shader "HmMeshMerge/URP Cutout"
         }
 
         // 行号来自合并资产的参数表，生成着色器的文件头会逐个列出；按你自己表里的行号改。
+        // 层号和参数行都按顶点插值下来的来源索引取，同一网格配不同材质时各自拿到自己的值。
         half4 SampleBaseMap(Varyings input)
         {
             uint index = (uint)round(input.sourceIndex);
