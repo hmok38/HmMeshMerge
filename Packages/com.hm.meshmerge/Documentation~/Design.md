@@ -16,6 +16,7 @@
 | HmMeshMergeTextureArrayImporter | 根据源贴图导入产物生成每层像素都有 CPU 数据的 Texture2DArray |
 | HmMeshMergeTextureSet | 生成阶段的属性名和数组引用 |
 | HmMeshMergeShaderWriter | 逐属性读取函数、URP 无光照展示及三个 Pass |
+| HmMeshMergeShaderPatcher | 复制来源 Shader 文本并注入接入点：三个属性、脚本包含与查找纹理声明、索引通道与实例化输入、材质索引插值通道、每个顶点入口的可见性包装；只插入与改名，不改写数值引用与贴图取样 |
 | HmMeshMerge.hlsl / HmMeshMergeIndex | 网格可见性判断、来源映射表与 LUT 读取；自定义路径的可选矩阵索引接口 |
 
 Runtime 编入 HmMeshMerge，不引用 UnityEditor。Editor 编入仅 Editor 平台的 HmMeshMergeEditor，只依赖 Runtime。没有新增程序集或辅助框架。
@@ -54,7 +55,7 @@ API 依据：[SetPixelData](https://docs.unity3d.com/2022.3/Documentation/Script
 
 ## Shader 与集成边界
 
-生成器不改源 Shader。每个普通材质属性都有 Properties / 声明 / 具体读取函数；unity_ 内置属性交给管线声明和绑定。二维贴图函数应用自己的 ST。主贴图与主颜色按 Shader 标记或常见名称作展示，绝不把第一个数值行当作颜色。Forward、ShadowCaster、DepthOnly 统一 Alpha 裁剪，阴影覆盖方向光和点/聚光灯路径。
+生成器不修改源 Shader 文件：模板路径完全不读源文本，复制路径也只读取文本、把改好的副本写成输出 Shader。每个普通材质属性都有 Properties / 声明 / 具体读取函数；unity_ 内置属性交给管线声明和绑定。二维贴图函数应用自己的 ST。主贴图与主颜色按 Shader 标记或常见名称作展示，绝不把第一个数值行当作颜色。Forward、ShadowCaster、DepthOnly 统一 Alpha 裁剪，阴影覆盖方向光和点/聚光灯路径。
 
 默认激活索引来自 _MeshMergeIndex 材质/实例属性。模板基于 URP，不承诺 SRP Batcher 兼容；其他管线要移植对应宏和 Pass。专用 Shader 由使用者复制并接入自己的算法，而非任意 Shader 效果的转换器。
 
@@ -62,21 +63,25 @@ API 依据：[SetPixelData](https://docs.unity3d.com/2022.3/Documentation/Script
 
 生成模板对 HmMeshMerge.hlsl 的包含路径在生成时按当前工程解析出的包路径写入，因此嵌入包（目录名）与 git、本地安装（包名）都能编译；示例 Shader 是静态文件，只能写死当前包名。
 
+勾选「尝试修改来源shader(副本)」时走 HmMeshMergeShaderPatcher：读取来源 Shader 文本，注入三个属性、脚本包含与两张查找纹理声明、顶点输入结构体的索引通道与实例化输入、插值结构体的 nointerpolation 材质索引通道，并把每个 #pragma vertex 入口改名后追加可见性包装；相对路径的 #include 改写成工程内的完整路径。只做插入与改名，源 Shader 的光照、风动、Alpha 裁剪等逻辑原样保留，也因此不承担任意 Shader 效果的转换责任：逐来源不同的数值引用与贴图取样不自动改写，只写入生成文件头部注释的待办（数值改用 HmMeshMergeLoadParam、贴图改用 2DArray 采样）；UsePass 引用的 Pass 注入不到，同样记入待办并提示隐藏来源仍会绘制。该路径不生成纹理数组，贴图规格与数组要求的校验随之跳过，材质仍绑定参数 LUT 与来源映射表。结构上定位不到必需元素时抛错而不是产出半成品：没有同时带 POSITION 与 SV_POSITION 的结构体、没有 Properties 块、索引通道与源 Shader 已用语义冲突、顶点入口的参数或返回结构体不是注入过通道的那两个。两条路径都先校验所有来源使用同一个 Shader。
+
 m33 编码作为已存在的公开接口保留，仅用于完全受控的自定义绘制：编码后不再是标准仿射矩阵，索引 0 时矩阵奇异，逆矩阵与剔除不能继续依赖普通 TRS 假设。普通验证使用材质属性路径。
 
 不提供渲染器、批次管理、实例剔除、动画烘焙或 HmSlgGame 接入。减少 draw call 仍需调用方把同 Mesh、同 Material 的实例实际组织到同一批次。
 
 ## 资产、失败与迁移
 
-- 输出位于配置资产目录，命名规则为「配置名_角色.扩展名」：_Mesh.asset（合并网格）、_Material.mat（输出材质）、_Shader.shader（生成的着色器）、_ParamLut.asset（参数 LUT）、_SourceMap.asset（来源映射表）、_Array_{属性名}.hmtexarray（纹理数组，属性名去掉下划线后重名时追加属性行号）。Mesh、Material、浮点 LUT、来源映射表原地 CopySerialized，保持 GUID；Shader 名含配置 GUID，避免不同目录同名配置的 Shader 名碰撞。
+- 输出位于配置资产目录，命名规则为「配置名_角色.扩展名」：_Mesh.asset（合并网格）、_Material.mat（输出材质）、_Shader.shader（生成的着色器）、_ParamLut.asset（参数 LUT）、_SourceMap.asset（来源映射表）、_Array_{属性名}.hmtexarray（纹理数组，属性名去掉下划线后重名时追加属性行号）。Mesh、Material、浮点 LUT、来源映射表原地 CopySerialized，保持 GUID。Shader 在文件里的名字是「HmMeshMerge/配置名」，工程里有同名配置时按资产路径顺序补 1 起的序号，避免同名 Shader 互相顶替（见下）。
 - 普通数组路径沿用旧命名；仅属性文件名冲突时增加标识。源 Shader 的插件保留名冲突在生成前报错。
 - 自定义输出 Shader 的数组维度、LUT 属性和来源映射表属性必须满足契约，否则报错。输出 Shader 已有编译错误时，停止创建材质。普通参数按类型逐项复制，转换为数组的槽位跳过源 2D 贴图绑定，只接收生成数组。
+- 复制来源 Shader 时输出 Shader 是来源的注入副本，属性与源一致，因此普通参数的类型校验恒等通过，也不生成数组；来源必须是工程内的 .shader 资产，内置 Shader 与 ShaderGraph 报错。生成文件每次合并都被覆盖，长期修改需另存为自有 Shader。
+- Shader 名不用配置 GUID，也不用时间戳：名字里出现哈希既不可读，也会在每次换机器、换配置时变化。只在工程里存在同名配置（同一个配置文件名的多个配置资产）时才补 1 起的序号，序号按资产路径排序分配，因此原样重复合并不会改名，生成的文件重新合并后仍是同一份 diff。
 - Builder 对非持久化的临时 Mesh、Texture、Material 使用 finally 释放；Importer 失败也释放临时数组。
 - 配置结果引用在生成完成后发布，但资产导出不是文件事务；I/O 或导入中途失败可能留下部分新文件或已更新文件。修复原因后重新合并。
 - 旧 _Params.png、_Params.asset、_Sources.asset 与历史图集、Shader 副本都不自动删除或迁移。重新合并按新名字生成并绑定参数 LUT 与来源映射表；旧生成资产不会因改源码自动更新。
 
 ## 人工验证
 
-检查来源索引切换、不同/相同参数、负数和大于 1 的数值、HDR 颜色、ST、UV/颜色动画数据、阴影和深度裁剪；核对同一网格、同一材质被多个来源交叉引用时几何只有一份、数组只为每个材质留一层，且各来源的数值与层不串用。顶点着色器用 Load 读来源映射表（顶点纹理获取），需在目标平台确认可用。再次合并后检查场景/Prefab 中的 Mesh 与 Material 引用；关闭重开编辑器后检查数组像素，以及目标平台包内格式。
+检查来源索引切换、不同/相同参数、负数和大于 1 的数值、HDR 颜色、ST、UV/颜色动画数据、阴影和深度裁剪；核对同一网格、同一材质被多个来源交叉引用时几何只有一份、数组只为每个材质留一层，且各来源的数值与层不串用。顶点着色器用 Load 读来源映射表（顶点纹理获取），需在目标平台确认可用。再次合并后检查场景/Prefab 中的 Mesh 与 Material 引用；关闭重开编辑器后检查数组像素，以及目标平台包内格式。复制来源 Shader 路径还需确认注入副本能编译、风动等自有逻辑未被破坏、被隐藏来源不投影，并逐条处理头部注释里的待办。
 
 仅进行了静态检查；未启动 Unity、导入、执行测试或构建。代码未编译，由用户人工编译验证。

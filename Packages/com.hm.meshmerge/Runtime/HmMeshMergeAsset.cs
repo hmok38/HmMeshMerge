@@ -30,6 +30,13 @@ namespace HmMeshMerge
         /// <summary>输出材质使用的 Shader。工具生成后会自动引用到这里；留空或清掉则重新生成。</summary>
         public Shader outputShader;
 
+        /// <summary>
+        /// 开启后复制来源 Shader 并注入合并接入点，保留源 Shader 的光照、风动等自有逻辑；
+        /// 关闭时生成无光照模板。两种方式都只注入索引通道与查找纹理，逐来源的数值与贴图差异
+        /// 只在开关关闭时由数组与 LUT 承载，开启时按生成文件头部列出的待办手工处理。
+        /// </summary>
+        public bool patchSourceShader;
+
         /// <summary>参与合并的源；下标即来源索引。请勿手工改动本列表。</summary>
         public IReadOnlyList<HmMeshMergeSource> Sources => _sources;
 

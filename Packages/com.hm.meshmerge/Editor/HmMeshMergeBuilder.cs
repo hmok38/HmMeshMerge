@@ -55,7 +55,8 @@ namespace HmMeshMergeEditor
             for (int i = 0; i < sourceShader.GetPropertyCount(); i++)
             {
                 string propertyName = sourceShader.GetPropertyName(i);
-                if (propertyName == "_MeshMergeIndex" || propertyName == HmMeshMergeParameterWriter.TEXTURE_NAME)
+                if (propertyName == "_MeshMergeIndex" || propertyName == HmMeshMergeParameterWriter.TEXTURE_NAME ||
+                    propertyName == SOURCE_TABLE_NAME)
                 {
                     errors.Add($"源 Shader 的 {propertyName} 与插件保留属性冲突。");
                 }
@@ -68,6 +69,12 @@ namespace HmMeshMergeEditor
 
             HmMeshMergeParameterWriter.Validate(asset.Sources, asset.Parameters, errors);
             if (errors.Count > 0)
+            {
+                return errors;
+            }
+
+            // 复制来源 Shader 时不生成数组，也不改写贴图取样，因此不校验数组的贴图要求。
+            if (asset.patchSourceShader)
             {
                 return errors;
             }
@@ -295,7 +302,10 @@ namespace HmMeshMergeEditor
             Material material = null;
             try
             {
-                List<HmMeshMergeTextureSet> sets = BuildTextureSets(asset, folder, name, materials);
+                // 复制来源 Shader 时贴图仍是 2D 取样，不能绑定 Texture2DArray，因此不生成数组。
+                List<HmMeshMergeTextureSet> sets = asset.patchSourceShader
+                    ? new List<HmMeshMergeTextureSet>()
+                    : BuildTextureSets(asset, folder, name, materials);
                 mesh = BuildMergedMesh(meshes, asset.indexChannel, name);
                 parameters = HmMeshMergeParameterWriter.Build(materials, asset.Parameters);
                 sourceTable = BuildSourceTable(sources, meshes, materials);
@@ -620,6 +630,82 @@ namespace HmMeshMergeEditor
             }
         }
 
+        /// <summary>复制来源 Shader 时无法自动改写的逐来源差异；写进生成文件的头部注释供使用者按行处理。</summary>
+        private static List<string> PatchNotes(HmMeshMergeAsset asset)
+        {
+            var notes = new List<string>();
+            List<string> textures = TextureParameters(asset);
+            if (textures.Count > 0)
+            {
+                notes.Add($"{string.Join("、", textures)} 的各来源贴图不同：本次未生成数组，材质使用第一来源的贴图；" +
+                    "需要逐来源贴图时把该属性改成 2DArray，采样改成 SAMPLE_TEXTURE2D_ARRAY(贴图, 采样器, uv, " +
+                    "(uint)round(input.materialIndex))。");
+            }
+
+            var values = new List<string>();
+            Shader shader = asset.Sources[0].material.shader;
+            foreach (HmMeshMergeParameterEntry entry in asset.Parameters)
+            {
+                if (entry.active &&
+                    HmMeshMergeParameterWriter.TryGetType(shader, entry.propertyName, out ShaderPropertyType type) &&
+                    type != ShaderPropertyType.Texture)
+                {
+                    values.Add(entry.propertyName);
+                }
+            }
+
+            if (values.Count > 0)
+            {
+                var rows = new List<string>();
+                foreach (HmMeshMergeParameterEntry entry in asset.Parameters)
+                {
+                    if (values.Contains(entry.propertyName))
+                    {
+                        rows.Add($"{entry.propertyName}={entry.row}");
+                    }
+                }
+
+                notes.Add($"{string.Join("、", values)} 的各来源数值不同：把引用改成 " +
+                    "HmMeshMergeLoadParam(_HmMeshMergeParams, input.materialIndex, 行号)，行号：" +
+                    string.Join("、", rows) + "。本次仍按普通材质属性读取，等于使用第一来源的值；参数 LUT 已生成并绑定。");
+            }
+
+            if (asset.indexChannel == HmMeshMergeChannel.VertexColor)
+            {
+                notes.Add("索引通道是顶点色：合并会覆盖 COLOR，源 Shader 里把顶点色当遮罩的用法需要改用其他通道。");
+            }
+
+            return notes;
+        }
+
+        /// <summary>
+        /// 生成 Shader 名：默认「HmMeshMerge/配置名」。工程里有同名的其他配置时，按资产路径顺序
+        /// 补 1 起的序号，避免同名 Shader 在 Unity 里互相顶替。用序号而不是 GUID 或时间戳，
+        /// 是为了让名字可读、可提交，并且重新合并不会改名。
+        /// </summary>
+        private static string ShaderName(HmMeshMergeAsset asset, string name)
+        {
+            string assetPath = AssetDatabase.GetAssetPath(asset);
+            var sameName = new List<string>();
+            foreach (string guid in AssetDatabase.FindAssets("t:" + nameof(HmMeshMergeAsset)))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.Equals(Path.GetFileNameWithoutExtension(path), name, StringComparison.Ordinal))
+                {
+                    sameName.Add(path);
+                }
+            }
+
+            if (sameName.Count <= 1)
+            {
+                return $"HmMeshMerge/{name}";
+            }
+
+            sameName.Sort(StringComparer.Ordinal);
+            int index = sameName.IndexOf(assetPath);
+            return index < 0 ? $"HmMeshMerge/{name}" : $"HmMeshMerge/{name}_{index + 1}";
+        }
+
         private static Shader ResolveOutputShader(HmMeshMergeAsset asset, List<HmMeshMergeSource> sources,
             List<Mesh> meshes, List<Material> materials, List<HmMeshMergeTextureSet> sets, string folder,
             string name)
@@ -630,9 +716,22 @@ namespace HmMeshMergeEditor
                 return asset.outputShader;
             }
 
-            string guid = AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(asset));
-            File.WriteAllText(path, HmMeshMergeShaderWriter.Write(sources, meshes, materials, asset.Parameters, sets,
-                asset.indexChannel, $"HmMeshMerge/{name}_{guid}"));
+            string shaderName = ShaderName(asset, name);
+            string text;
+            if (asset.patchSourceShader)
+            {
+                List<string> notes = PatchNotes(asset);
+                text = HmMeshMergeShaderPatcher.Patch(sources[0].material.shader, asset.indexChannel, shaderName, notes);
+                Debug.LogWarning($"[HmMeshMerge] 已复制并注入来源 Shader：{path}；待人工处理 {notes.Count} 项，" +
+                    "详见生成文件的头部注释。", asset);
+            }
+            else
+            {
+                text = HmMeshMergeShaderWriter.Write(sources, meshes, materials, asset.Parameters, sets,
+                    asset.indexChannel, shaderName);
+            }
+
+            File.WriteAllText(path, text);
             AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
             Shader shader = AssetDatabase.LoadAssetAtPath<Shader>(path);
             if (shader == null)

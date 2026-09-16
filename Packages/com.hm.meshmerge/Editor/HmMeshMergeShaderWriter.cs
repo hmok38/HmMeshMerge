@@ -58,7 +58,7 @@ namespace HmMeshMergeEditor
         }
 
         /// <summary>取当前工程里 HmMeshMerge.hlsl 的实际路径；包名或安装位置变化时无需改模板。</summary>
-        private static string RuntimeIncludePath()
+        internal static string RuntimeIncludePath()
         {
             PackageInfo package = PackageInfo.FindForAssembly(typeof(HmMeshMergeShaderWriter).Assembly);
             if (package == null)

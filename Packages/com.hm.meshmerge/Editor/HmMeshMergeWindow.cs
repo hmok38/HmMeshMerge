@@ -315,6 +315,10 @@ namespace HmMeshMergeEditor
                 new GUIContent("索引通道", "默认 UV3（TEXCOORD3），必须是所有源网格的空闲通道。"));
             EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.outputShader)),
                 new GUIContent("输出 Shader", "留空时生成 URP 无光照接入模板；也可指定已接入数据契约的 Shader。"));
+            EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.patchSourceShader)),
+                new GUIContent("尝试修改来源shader(副本)",
+                    "开启后复制来源 Shader 并注入索引通道、查找纹理与可见性判断，保留风动、光照等自有逻辑；" +
+                    "逐来源的数值与贴图差异不自动改写，会列在生成文件的头部注释里。关闭则生成无光照模板。"));
         }
 
         private void DrawActions()

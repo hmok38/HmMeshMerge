@@ -37,7 +37,7 @@
 | 行号稳定 | 刷新和停用不能改变已有行号；只有用户显式执行“重新整理参数表”才重新编号 |
 | 配置载体 | 合并资产本身就是配置，窗口不另存第二份设置 |
 | 窗口初始入口 | 未绑定配置时提供“新建 / 选择资产” |
-| 输出 Shader | 不改写源 Shader；生成基础展示和可复制的逐属性读取模板 |
+| 输出 Shader | 默认不改写源 Shader，生成基础展示和可复制的逐属性读取模板；另有「尝试修改来源shader(副本)」开关，勾选后复制来源 Shader 并注入接入点 |
 | Shader 引用 | 生成后回填输出 Shader；留空或仍指向默认生成路径时重新生成 |
 | 消息 | 窗口显示的提示、错误同步到 Console |
 | 尺寸不一致 | **本次用户明确选择：只报错，由用户手动统一尺寸，不自动缩放或修改源导入设置** |
@@ -47,7 +47,6 @@
 - 默认使用顶点色存索引：已改为默认 UV3，顶点色只作为可选通道。
 - 顶点通道存放颜色、阈值等外观参数：已改为参数 LUT。
 - 图集、UV 重映射、模型按索引偏移位置：不再采用。
-- 自动复制并改写源 Shader：已改为生成独立接入模板。
 - flipbook 作为备用路径：不保留。
 - 窗口维护一份设置、合并时再复制到配置资产：已统一为直接编辑资产。
 - 尺寸不一致时弹窗后自动缩小：本次按用户确认移除。
@@ -61,6 +60,7 @@
 - 当前生成模板和示例仍针对 URP；其他管线需要移植管线相关声明与 Pass。
 - unity_ 前缀的管线内置属性不作为普通材质参数生成。
 - 蒙皮、BlendShape、非三角形拓扑明确报错，需先处理为支持的静态网格。
+- 「尝试修改来源shader(副本)」是可选能力：复制来源 Shader 文本并注入接入点，只做插入与改名，因此保留风动、光照等自有逻辑；逐来源不同的数值引用与贴图取样不自动改写，改为写入生成文件头部注释的待办。
 
 ## 三、源码组织与职责
 
@@ -86,9 +86,10 @@ Runtime 不依赖 UnityEditor。配置资产在运行时按只读数据使用；
 | [HmMeshMergeParameterWriter](../Packages/com.hm.meshmerge/Editor/HmMeshMergeParameterWriter.cs) | BuildInitialTable、RefreshTable、ReadValue、Build、Save；维护参数表并生成浮点 LUT |
 | [HmMeshMergeTextureArrayImporter](../Packages/com.hm.meshmerge/Editor/HmMeshMergeTextureArrayImporter.cs) | OnImportAsset、ValidateTextures；登记来源依赖并生成持久化 Texture2DArray，当前导入器版本为 3 |
 | [HmMeshMergeShaderWriter](../Packages/com.hm.meshmerge/Editor/HmMeshMergeShaderWriter.cs) | Write；生成属性、声明、读取函数、显示与阴影/深度 Pass，最后统一换行为 LF |
+| [HmMeshMergeShaderPatcher](../Packages/com.hm.meshmerge/Editor/HmMeshMergeShaderPatcher.cs) | Patch；复制来源 Shader 文本并注入接入点（属性、包含与查找纹理声明、索引通道与实例化输入、材质索引插值通道、顶点入口可见性包装），只插入与改名，结构不符时报错 |
 | [HmMeshMergeTextureSet](../Packages/com.hm.meshmerge/Editor/HmMeshMergeTextureSet.cs) | 生成阶段传递属性名与 Texture2DArray 引用 |
 
-Editor 程序集只包含 Editor 平台，引用 Runtime。本轮沿用已有职责类型，没有新增程序集、测试或辅助框架；删除了原来只服务于丢弃通道方案的 MeshData 嵌套累积器。
+Editor 程序集只包含 Editor 平台，引用 Runtime。本轮新增 HmMeshMergeShaderPatcher（复制来源 Shader 并注入），仍没有新增程序集、测试或辅助框架；删除了原来只服务于丢弃通道方案的 MeshData 嵌套累积器。
 
 ## 四、合并主流程
 
@@ -116,7 +117,7 @@ Editor 程序集只包含 Editor 平台，引用 Runtime。本轮沿用已有职
 |---|---|---|
 | `{配置名}_Mesh.asset` | Mesh | 合并网格：去重后各源网格的局部顶点、法线、切线、顶点色、UV0–UV7，并额外写入网格索引通道 |
 | `{配置名}_Material.mat` | Material | 输出材质：绑定生成的纹理数组、参数 LUT、来源映射表；普通属性取第一来源的材质值 |
-| `{配置名}_Shader.shader` | Shader | 生成的 URP 展示与接入模板：Properties、纹理声明、逐属性读取函数、索引判断与 Alpha 裁剪 |
+| `{配置名}_Shader.shader` | Shader | 输出 Shader：默认是生成的 URP 展示与接入模板（Properties、纹理声明、逐属性读取函数、索引判断与 Alpha 裁剪）；勾选「尝试修改来源shader(副本)」时改为来源 Shader 的注入副本 |
 | `{配置名}_ParamLut.asset` | Texture2D | 参数 LUT：X 为材质索引、Y 为稳定参数行，存放各来源的数值参数；无启用数值时不生成 |
 | `{配置名}_SourceMap.asset` | Texture2D | 来源映射表：宽为来源数、高 1，把来源索引映射到网格索引与材质索引 |
 | `{配置名}_Array_{属性名}.hmtexarray` | Texture2DArray | 每个启用且各来源引用不同的二维贴图属性一份数组，层号即材质索引 |
@@ -226,7 +227,7 @@ Write 按顺序生成：
 6. 基础显示函数及 ForwardUnlit、ShadowCaster、DepthOnly。
 7. 将 CRLF 和独立 CR 统一为 LF，消除 Windows AppendLine 与多行模板混用产生的换行警告。
 
-unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。专用 Shader 名加入配置资产 GUID，避免不同目录下同名配置产生同名 Shader。
+unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。专用 Shader 名是「HmMeshMerge/配置名」，只有工程里存在同名配置（同一个配置文件名的多个配置资产）时才按资产路径顺序补 1 起的序号，避免同名 Shader 互相顶替；不用配置 GUID 或时间戳，名字可读、可提交，重新合并也不会改名。
 
 ### 数值与贴图读取
 
@@ -245,6 +246,16 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 - 阴影代码包含方向光以及点光/聚光灯分支与近裁剪面处理。
 
 模板不还原源 Shader 的完整光照、透明混合、法线解码、动画或专有效果。主贴图、颜色和裁剪参数仍是普通参数表项，没有恢复为独立配置字段。
+
+### 复制来源 Shader（可选）
+
+配置里的 `patchSourceShader` 打开时，ResolveOutputShader 改调 HmMeshMergeShaderPatcher.Patch，输出的 `{配置名}_Shader.shader` 是来源 Shader 的注入副本；关闭时仍走 HmMeshMergeShaderWriter 模板。两条路径都先校验所有来源使用同一个 Shader。源 Shader 文件只被读取，不写回。
+
+- 注入顺序：改写相对 `#include` 为工程内完整路径 → 记录 UsePass 待办 → 注入三个属性 → 仅在整份文件没有实例化变体时给每个 `#pragma vertex` 补 `#pragma multi_compile_instancing` → 在每个 HLSL 块的最后一个 `#include` 之后插入 HmMeshMerge.hlsl 包含与两张查找纹理的 TEXTURE2D 声明 → 顶点输入结构体加 `float2 meshIndex`（顶点色通道用 `float4`）与 `UNITY_VERTEX_INPUT_INSTANCE_ID`（结构体已有该宏时不重复加）→ 插值结构体加 `nointerpolation float materialIndex`（槽位取已用 TEXCOORD 最大值 +1）→ 每个 `#pragma vertex` 入口改名成 `HmMeshMergeSource_<入口名>`，原位置追加包装函数。
+- 包装函数：`UNITY_SETUP_INSTANCE_ID`、调用改名后的原函数、用 HmMeshMergeLoadSourceMaterial 换出材质索引写进插值结构体、用 HmMeshMergeLoadSourceMesh 换出网格索引与顶点上的网格索引比较，不一致时把 SV_POSITION 成员写到 `float4(2, 2, 2, 1)`。顶点色通道解码用 HmMeshMergeDecodeColorIndex（读 r），UV 通道用 HmMeshMergeDecodeUvIndex（读 x）。
+- 只做插入与改名，不改写数值引用与贴图取样，所以源 Shader 的光照、风动、Alpha 裁剪原样保留；生成文件头部注释列出待办：逐来源不同的数值（改用 HmMeshMergeLoadParam + 行号）、逐来源不同的贴图（改 2DArray 采样）、UsePass 引用的 Pass（注入不到，隐藏来源仍会绘制）、索引通道选顶点色而源 Shader 把顶点色当遮罩。
+- 插入位置或目标结构不成立时直接抛错，不产出半成品：来源不是工程内的 `.shader` 资产、没有同时带 POSITION 与 SV_POSITION 的结构体、没有 Properties 块、索引通道语义冲突、顶点输入已有 meshIndex、顶点入口的第一个参数或返回结构体不是注入过通道的那两个。
+- 该路径不生成纹理数组（sets 为空），因此跳过贴图规格与数组维度的校验；材质仍绑定参数 LUT 与来源映射表，普通属性按第一来源复制。生成文件每次合并被覆盖，作为产物的副本按 ShaderWriter 的同一路径换行规则输出 LF。
 
 ### 材质绑定
 
@@ -293,6 +304,8 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 | HmSlgGame 中生成 Shader 报 Couldn't open include file 'Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl' | HmSlgGame 用 git URL 安装该包，包按当时 package.json 的 name（com.huangmin.meshmerge）落到 Library/PackageCache，可解析的路径只有 Packages/com.huangmin.meshmerge；而生成模板写死的 com.hm.meshmerge 只对应本工程里嵌入目录的物理名 | 模板改为生成时用 PackageInfo.FindForAssembly 解析实际包路径；随后按用户决定把包名改回 com.hm.meshmerge，与目录名统一 | 源码已修改，等待用户在 HmSlgGame 更新包后重新合并验证 |
 | 合并后的网格没有去重，同一网格的顶点与三角形重复出现 | 原实现按来源逐个拼接几何；来源是「网格 + 材质」的组合，mesh a、mesh b 与 material a、material b 交叉组合时 mesh a 与 mesh b 各出现两次 | 按引用对来源网格去重，顶点通道改存网格索引；新增来源映射表 _SourceMap.asset（Shader 侧 _HmMeshMergeSources）记录来源索引到网格索引的映射；参数 LUT 行与纹理数组层号改按材质索引读取（见下一条），避免改索引语义后同一网格的不同材质组合串用数值与贴图 | 源码已修改，等待用户重新合并后验证重复几何与逐来源切换 |
 | 材质会随来源组合重复占用数组层与 LUT 列 | 原实现按来源建数组层（层数 = 来源数）、按来源建 LUT 列；来源是「网格 + 材质」的组合，material a 被两个来源引用时，同一张贴图会被放进两层 | 按引用对材质去重（与网格同规则），数组层数与 LUT 宽度改为去重后的材质数；来源映射表增加 G 通道记录材质索引，数值与数组层都按材质索引读取 | 源码已修改，等待用户重新合并后核对数组层数等于材质数、逐来源切换取值正确 |
+| 合并后树冠风动消失 | 生成的是 URP 无光照模板，不含源 Shader 的风动逻辑，复制到自有 Shader 需人工逐项接入 | 增加可选开关「尝试修改来源shader(副本)」：复制来源 Shader 文本并注入索引通道、脚本包含与查找纹理声明、材质索引插值通道和每个顶点入口的可见性包装，风动、光照等逻辑原样保留；不自动改写逐来源数值与贴图取样，连同 UsePass 引用的 Pass 一并列成头部注释里的待办 | 源码已修改，等待用户开启开关后重新合并并在 Unity 中编译验证 |
+| 生成 Shader 的名字带哈希不便于管理 | Shader 名写作 `HmMeshMerge/{配置名}_{配置GUID}`，Unity 的 Shader 报错里显示的就是这个名字，看起来像生成了带哈希的文件 | 改为 `HmMeshMerge/{配置名}`；只有工程里存在同名配置时才按资产路径顺序补 1 起的序号，避免同名 Shader 互相顶替。不用时间戳，重复合并不会改名，生成文件重新合并后仍是同一份 diff | 源码已修改，等待用户重新合并确认 Shader 名 |
 
 上述“源码已修改”不等于用户已经确认问题消失。特别是材质维度错误的最终运行结果，不能仅凭修复代码推断已通过。
 
@@ -304,7 +317,8 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 
 - 完整阅读需求及项目适用规范。
 - 对照源码检查输入、输出、参数表、材质绑定和资源生命周期。
-- 使用 Roslyn ParseText 进行 C# 语法解析；此前全包 11 个 C# 文件解析无语法错误，后续相关修复也进行了语法检查。
+- 使用 Roslyn ParseText 进行 C# 语法解析；全包 12 个 C# 文件解析无语法错误，后续相关修复也进行了语法检查。
+- 按 HmMeshMergeShaderPatcher 的定位与注入算法在目标 Shader（NSLG/GPU Animation/Vertex Color Wind Lit URP）上逐步复算：结构体区间、属性插入点、包含锚点、索引通道与材质索引槽位、顶点入口签名与包装文本都符合预期。
 - 执行 git diff --check。
 - 读取用户提供的报错及相关 Editor.log / 导入工作进程日志；核对生成 Shader、资产引用和 URP 本地声明。
 
@@ -315,6 +329,7 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 - 没有确认最终 Shader 在所有 Pass、实例化变体及目标平台上全部通过。
 - 没有测量 draw call、GPU 时间、内存或包体，不能宣称已获得量化性能收益。
 - 没有完成 HmSlgGame 接入、批次归并和实例索引传递。
+- 没有在 Unity 中编译过注入后的 Shader；复制路径依赖顶点入口的参数与返回结构体就是注入过通道的结构体，多顶点输入结构体或内置 Shader、ShaderGraph 会直接报错，需要真实工程验证。
 
 ### 建议的人工验证顺序
 
@@ -325,6 +340,7 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 5. 检查 Alpha 裁剪在显示、阴影与深度中的一致性。
 6. 修改来源后再次合并，确认未删除重建的 Mesh 与 Material 引用保持。
 7. 重开项目检查数组像素仍存在，再进行 Android 实际格式、包体和运行验证。
+8. 勾选「尝试修改来源shader(副本)」再合并一次，确认注入副本无编译错误、风动等自有逻辑保留、被隐藏来源不投影，并逐条处理生成文件头部列出的待办。
 
 **代码未编译，由用户人工编译验证。**
 
