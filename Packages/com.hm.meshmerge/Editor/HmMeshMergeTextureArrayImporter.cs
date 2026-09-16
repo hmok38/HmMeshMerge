@@ -43,9 +43,11 @@ namespace HmMeshMergeEditor
                 return;
             }
 
-            if (!ValidateTextures(_textures, out string reason))
+            // 明细只在点击“执行合并”时由 Builder 报出；重导阶段只说明数组没生成，避免非合并时机刷出长清单。
+            if (!ValidateTextures(_textures, out _))
             {
-                ctx.LogImportError(reason);
+                ctx.LogImportError($"{ctx.assetPath} 的来源贴图参数不一致，未生成数组。" +
+                    "在网格合并窗口点击“执行合并”可看到需要修改的项与建议尺寸。");
                 return;
             }
 
@@ -118,57 +120,158 @@ namespace HmMeshMergeEditor
                 return false;
             }
 
-            Texture2D master = textures[0];
             for (int i = 0; i < textures.Count; i++)
             {
-                Texture2D texture = textures[i];
-                if (texture == null)
+                if (textures[i] == null)
                 {
                     reason = $"第 {i} 层为空或不是 Texture2D；启用数组的每个来源都必须指定二维贴图。";
                     return false;
                 }
 
-                if (!IsImportedAssetPath(AssetDatabase.GetAssetPath(texture)))
+                if (!IsImportedAssetPath(AssetDatabase.GetAssetPath(textures[i])))
                 {
-                    reason = $"第 {i} 层 {texture.name} 是内置或非资产贴图，无法作为数组的导入来源。" +
+                    reason = $"第 {i} 层 {textures[i].name} 是内置或非资产贴图，无法作为数组的导入来源。" +
                         "请停用该属性的数组化，或为每个来源指定 Assets / Packages 中的实际贴图。";
-                    return false;
-                }
-
-                if (texture.width != master.width || texture.height != master.height ||
-                    texture.graphicsFormat != master.graphicsFormat || texture.mipmapCount != master.mipmapCount)
-                {
-                    reason = $"第 {i} 层 {texture.name} 为 {texture.width}×{texture.height} / " +
-                        $"{texture.graphicsFormat} / {texture.mipmapCount} mip；第 0 层为 " +
-                        $"{master.width}×{master.height} / {master.graphicsFormat} / {master.mipmapCount} mip。" +
-                        "请手动统一宽高、实际格式（含 sRGB）和 mip 层数。";
-                    return false;
-                }
-
-                if (!texture.isReadable)
-                {
-                    reason = $"{texture.name}：请手动开启 Read/Write；生成数组需要读取可保存的像素数据。";
-                    return false;
-                }
-
-                if (texture.format == TextureFormat.DXT1Crunched || texture.format == TextureFormat.DXT5Crunched ||
-                    texture.format == TextureFormat.ETC_RGB4Crunched || texture.format == TextureFormat.ETC2_RGBA8Crunched)
-                {
-                    reason = $"{texture.name}：纹理数组不能直接使用 Crunch 数据，请关闭 Crunch。";
-                    return false;
-                }
-
-                if (texture.filterMode != master.filterMode || texture.wrapModeU != master.wrapModeU ||
-                    texture.wrapModeV != master.wrapModeV || texture.anisoLevel != master.anisoLevel ||
-                    texture.mipMapBias != master.mipMapBias)
-                {
-                    reason = $"{texture.name}：采样设置与第 0 层不同；同一数组只能使用一组采样设置。";
                     return false;
                 }
             }
 
-            reason = string.Empty;
-            return true;
+            Texture2D master = textures[0];
+            ResolveTargetSize(textures, out int targetWidth, out int targetHeight);
+            var blocks = new List<string>();
+            for (int i = 0; i < textures.Count; i++)
+            {
+                string block = DescribeProblems(i, master, textures[i], targetWidth, targetHeight);
+                if (block != null)
+                {
+                    blocks.Add(block);
+                }
+            }
+
+            if (blocks.Count == 0)
+            {
+                reason = string.Empty;
+                return true;
+            }
+
+            var listing = new List<string>();
+            for (int i = 0; i < textures.Count; i++)
+            {
+                listing.Add(DescribeLayer(i, textures[i]));
+            }
+
+            var lines = new List<string>
+            {
+                "数组各层必须完全一致：宽高、实际格式（含 sRGB）、mip 层数、Read/Write、Crunch 与采样设置。",
+                "数组尺寸取自第 0 层，宽高建议统一为各层最大尺寸。",
+                string.Empty,
+                "建议修改的来源贴图：",
+                string.Join("\n\n", blocks),
+                string.Empty,
+                "全部来源贴图：",
+                string.Join("\n\n", listing),
+                string.Empty,
+                "按上表修改对应源贴图的导入设置后重新合并。"
+            };
+            reason = string.Join("\n", lines);
+            return false;
+        }
+
+        /// <summary>数组各层必须同尺寸；取各层最大宽高作为建议目标，任何一层都不必降分辨率。</summary>
+        private static void ResolveTargetSize(IReadOnlyList<Texture2D> textures, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            foreach (Texture2D texture in textures)
+            {
+                width = Mathf.Max(width, texture.width);
+                height = Mathf.Max(height, texture.height);
+            }
+        }
+
+        /// <summary>列出该层需要手动修改的参数与建议；无需修改时返回 null。</summary>
+        private static string DescribeProblems(int index, Texture2D master, Texture2D texture,
+            int targetWidth, int targetHeight)
+        {
+            var problems = new List<string>();
+            if (texture.width != targetWidth || texture.height != targetHeight)
+            {
+                problems.Add($"宽高 {texture.width}×{texture.height}，建议调整为 {targetWidth}×{targetHeight}");
+            }
+
+            if (texture.graphicsFormat != master.graphicsFormat)
+            {
+                problems.Add($"实际格式 {DescribeFormat(texture)}，建议改成与第 0 层相同的 {DescribeFormat(master)}");
+            }
+
+            if (texture.mipmapCount != master.mipmapCount)
+            {
+                problems.Add($"mip {texture.mipmapCount} 层，建议改成与第 0 层相同的 {master.mipmapCount} 层");
+            }
+
+            if (texture.filterMode != master.filterMode || texture.wrapModeU != master.wrapModeU ||
+                texture.wrapModeV != master.wrapModeV || texture.anisoLevel != master.anisoLevel ||
+                texture.mipMapBias != master.mipMapBias)
+            {
+                problems.Add($"采样设置 {DescribeSampling(texture)}，建议改成与第 0 层相同的 {DescribeSampling(master)}");
+            }
+
+            if (!texture.isReadable)
+            {
+                problems.Add("未开启 Read/Write，建议在导入设置里勾选 Read/Write");
+            }
+
+            if (IsCrunched(texture))
+            {
+                problems.Add($"使用了 {texture.format} 压缩，建议关闭 Crunch 压缩");
+            }
+
+            if (problems.Count == 0)
+            {
+                return null;
+            }
+
+            var lines = new List<string>
+            {
+                $"第 {index} 层 {texture.name}",
+                $"  路径  {AssetDatabase.GetAssetPath(texture)}"
+            };
+            lines.AddRange(problems.ConvertAll(problem => "  " + problem));
+            return string.Join("\n", lines);
+        }
+
+        /// <summary>逐层列出自查用的实际参数，便于按表修改源贴图导入设置。</summary>
+        private static string DescribeLayer(int index, Texture2D texture)
+        {
+            var lines = new List<string>
+            {
+                $"{index}  {texture.name}",
+                $"  路径  {AssetDatabase.GetAssetPath(texture)}",
+                $"  宽高  {texture.width}×{texture.height}",
+                $"  格式  {DescribeFormat(texture)}",
+                $"  mip   {texture.mipmapCount} 层，Read/Write {(texture.isReadable ? "开" : "关")}，" +
+                $"Crunch {(IsCrunched(texture) ? "有" : "无")}",
+                $"  采样  {DescribeSampling(texture)}"
+            };
+            return string.Join("\n", lines);
+        }
+
+        private static string DescribeFormat(Texture2D texture)
+        {
+            bool sRGB = GraphicsFormatUtility.IsSRGBFormat(texture.graphicsFormat);
+            return $"{texture.graphicsFormat}（{(sRGB ? "sRGB" : "线性")}）";
+        }
+
+        private static string DescribeSampling(Texture2D texture)
+        {
+            return $"{texture.filterMode}/{texture.wrapModeU}/{texture.wrapModeV}/aniso {texture.anisoLevel}/" +
+                $"bias {texture.mipMapBias}";
+        }
+
+        private static bool IsCrunched(Texture2D texture)
+        {
+            return texture.format == TextureFormat.DXT1Crunched || texture.format == TextureFormat.DXT5Crunched ||
+                texture.format == TextureFormat.ETC_RGB4Crunched || texture.format == TextureFormat.ETC2_RGBA8Crunched;
         }
     }
 }

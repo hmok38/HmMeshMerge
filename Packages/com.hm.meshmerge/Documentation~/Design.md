@@ -1,6 +1,6 @@
 ﻿# HmMeshMerge 设计说明
 
-当前契约以用户需求定稿及本次确认的“尺寸不一致只报错，用户手工统一”为准。旧图集、flipbook、顶点外观参数和默认顶点色方案已作废。
+当前契约以用户需求定稿及本次确认的“尺寸不一致只报错并给出建议尺寸，用户手工统一”为准。旧图集、flipbook、顶点外观参数和默认顶点色方案已作废。
 
 ## 主链与职责
 
@@ -45,7 +45,7 @@ Runtime 编入 HmMeshMerge，不引用 UnityEditor。Editor 编入仅 Editor 平
 
 .hmtexarray 源文件为空，贴图引用按顺序存在其 .meta 导入设置中。Importer 对有效来源先声明 DependsOnArtifact，随后校验和生成；错误时也保留已知依赖，便于源贴图修复后再次导入。
 
-校验实际宽高、graphicsFormat（包含 sRGB）、mip 层数和采样设置；不以压缩设置名称替代实际格式。尺寸不一致只报错，不修改源贴图。来源需手动开启 Read/Write，Crunch 需关闭。数组按实际 TextureFormat、mip 数与线性标识创建；发生格式回退即报错。逐层逐 mip 的 GetPixelData / SetPixelData 写入 CPU 数据后 Apply，避免只复制 GPU 内容却缺少可保存像素。
+校验实际宽高、graphicsFormat（包含 sRGB）、mip 层数和采样设置；不以压缩设置名称替代实际格式。任一参数不一致只在点击“执行合并”时报出明细：分行列出需要修改的层、建议值与全部来源贴图的参数清单；数组资产重导（改源贴图、切平台、打开工程）时只记录一行“未生成数组”的提示，不在非合并时机刷出长清单。插件不缩放、不改源导入设置，由用户手动统一。来源需手动开启 Read/Write，Crunch 需关闭。数组按实际 TextureFormat、mip 数与线性标识创建；发生格式回退即报错。逐层逐 mip 的 GetPixelData / SetPixelData 写入 CPU 数据后 Apply，避免只复制 GPU 内容却缺少可保存像素。
 
 源贴图和输出数组保留 CPU 数据以满足导入与保存，需要计入内存开销。切换目标平台后的格式由实际源导入产物决定；未出包验证前不声称 Android 一定是 ASTC。
 
