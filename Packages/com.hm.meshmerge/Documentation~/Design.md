@@ -57,6 +57,8 @@ API 依据：[SetPixelData](https://docs.unity3d.com/2022.3/Documentation/Script
 
 默认激活索引来自 _MeshMergeIndex 材质/实例属性。模板基于 URP，不承诺 SRP Batcher 兼容；其他管线要移植对应宏和 Pass。专用 Shader 由使用者复制并接入自己的算法，而非任意 Shader 效果的转换器。
 
+生成模板对 HmMeshMerge.hlsl 的包含路径在生成时按当前工程解析出的包路径写入，因此嵌入包（目录名）与 git、本地安装（包名）都能编译；示例 Shader 是静态文件，只能写死当前包名。
+
 m33 编码作为已存在的公开接口保留，仅用于完全受控的自定义绘制：编码后不再是标准仿射矩阵，索引 0 时矩阵奇异，逆矩阵与剔除不能继续依赖普通 TRS 假设。普通验证使用材质属性路径。
 
 不提供渲染器、批次管理、实例剔除、动画烘焙或 HmSlgGame 接入。减少 draw call 仍需调用方把同 Mesh、同 Material 的实例实际组织到同一批次。

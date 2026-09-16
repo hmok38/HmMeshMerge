@@ -31,7 +31,8 @@ Shader "HmMeshMerge/URP Cutout"
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
 
         // HmMeshMergeLoadParam 由该文件提供；查找纹理和普通材质属性一样要自己声明。
-        #include "Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl"
+        // 路径写死为当前包名 com.huangmin.meshmerge；包改名后必须同步修改（工具生成的模板按实际安装位置写入）。
+        #include "Packages/com.huangmin.meshmerge/Runtime/HmMeshMerge.hlsl"
 
         TEXTURE2D_ARRAY(_BaseMap);
         SAMPLER(sampler_BaseMap);

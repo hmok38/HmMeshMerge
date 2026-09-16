@@ -268,8 +268,11 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 | PreprocessAsset 空引用 | 日志先报材质不在 SourceAssetDB、.meta 存在而 .mat 缺失，然后发生 InitPostprocessors / PreprocessAsset 异常 | 按用户确认清空生成残留与配置输出引用 | 已核对清理结果；不把它误写成已定位插件中的空引用语句 |
 | 2DArray 赋给 2D 的错误 | 生成 _BaseMap 已声明为 2DArray，但日志更早报 unity_Lightmaps 重复声明、Shader 编译失败 | 排除管线内置属性；Shader 报错时停止；材质按类型复制并跳过数组槽位的源 2D 贴图 | 源码已修改，需重新生成后验证 |
 | Shader 混用换行 | 当时生成文件含 301 处 CRLF 与 126 处独立 LF | Write 返回前统一为 LF | C# 语法与差异检查通过，等待用户重新生成确认 |
+| HmSlgGame 中生成 Shader 报 Couldn't open include file 'Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl' | HmSlgGame 用 git URL 安装该包，包按 package.json 的 name 落到 Library/PackageCache/com.huangmin.meshmerge@4463630ded，可解析的路径是 Packages/com.huangmin.meshmerge；而生成模板写死的 com.hm.meshmerge 只对应本工程里嵌入目录的物理名 | 模板改为生成时用 PackageInfo.FindForAssembly 解析实际包路径；示例 Shader 与文档改用实际包名 | 源码已修改，等待用户在 HmSlgGame 重新合并验证 |
 
 上述“源码已修改”不等于用户已经确认问题消失。特别是材质维度错误的最终运行结果，不能仅凭修复代码推断已通过。
+
+包名与嵌入目录名不一致（package.json 为 com.huangmin.meshmerge，目录为 Packages/com.hm.meshmerge）自提交 4dabbfb 起存在，是本次报错的直接原因之一。统一命名需要同时改动 git URL 的 path 参数或 HmSlgGame 的依赖名，属于用户决定事项，本次只做了不再依赖该名字的代码修复。
 
 ## 十一、验证记录与下一步
 

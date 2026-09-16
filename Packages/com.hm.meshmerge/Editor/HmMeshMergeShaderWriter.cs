@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using HmMeshMerge;
+using UnityEditor.PackageManager;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -27,9 +28,9 @@ namespace HmMeshMergeEditor
         Cull Off
         HLSLINCLUDE
         #include ""Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl""
-        #include ""Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl""
-        #include ""Packages/com.hm.meshmerge/Runtime/HmMeshMerge.hlsl""
-        TEXTURE2D(_HmMeshMergeParams);");
+        #include ""Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl""");
+            text.AppendLine($"        #include \"{RuntimeIncludePath()}\"");
+            text.AppendLine("        TEXTURE2D(_HmMeshMergeParams);");
             WriteDeclarations(text, shader, textureSets);
             WriteAccessors(text, shader, table, textureSets);
             WriteVertexCode(text, channel);
@@ -54,10 +55,23 @@ namespace HmMeshMergeEditor
             return result.Replace("\r\n", "\n").Replace("\r", "\n");
         }
 
+        /// <summary>取当前工程里 HmMeshMerge.hlsl 的实际路径；包名或安装位置变化时无需改模板。</summary>
+        private static string RuntimeIncludePath()
+        {
+            PackageInfo package = PackageInfo.FindForAssembly(typeof(HmMeshMergeShaderWriter).Assembly);
+            if (package == null)
+            {
+                throw new InvalidOperationException("未能定位 HmMeshMerge 包，无法生成 HmMeshMerge.hlsl 的包含路径。");
+            }
+
+            return $"{package.assetPath.TrimEnd('/')}/Runtime/HmMeshMerge.hlsl";
+        }
+
         private static void WriteHeader(StringBuilder text, List<HmMeshMergeSource> sources,
             IReadOnlyList<HmMeshMergeParameterEntry> table)
         {
             text.AppendLine("// HmMeshMergeShaderWriter 生成；输入为合并配置。下次合并会覆盖，请复制到自有 Shader 后修改。");
+            text.AppendLine("// 包含路径按本工程实际安装的包位置生成；复制到其他工程时按该工程的包路径修改。");
             text.AppendLine("// 复制对应 Properties、纹理声明、HmRead/HmSample 函数和索引判断到自有 Shader。");
             text.AppendLine("// 数值函数直接返回正确的标量/向量；启用行走 LUT，其他参数使用第一来源的普通材质属性。");
             text.AppendLine("// _ST 函数返回各贴图的 Tiling.xy 和 Offset.zw，网格 UV 本身未改变。");

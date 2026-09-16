@@ -8,6 +8,8 @@ ForwardLit、ShadowCaster、DepthOnly 都处理来源选择和 Alpha 裁剪。�
 
 通过 Package Manager 导入示例或复制 Shader 到 Assets 后，可把配置中的“输出 Shader”指向它。改动索引通道时，必须同时修改 Attributes 的语义与解码函数。
 
+示例里的 `#include "Packages/com.huangmin.meshmerge/Runtime/HmMeshMerge.hlsl"` 是写死的静态路径，必须与当前包名一致；包改名或改用其他安装方式后要手工修改。工具生成的模板不需要关心这一点，它按工具所在工程的实际包路径写入。
+
 矩阵 m33 编码只用于已适配的自定义绘制，不是普通 TRS；不要把改写矩阵直接传入未经适配的绘制、逆矩阵或剔除流程。实例属性路径也不承诺 SRP Batcher 兼容。
 
 代码未编译，由用户人工编译验证。

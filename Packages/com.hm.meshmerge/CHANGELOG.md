@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 修复在 git 或本地安装该包时生成 Shader 无法包含 HmMeshMerge.hlsl 的报错：模板不再写死包路径，改为按工具所在工程解析出的包路径生成；示例 Shader 与文档同步使用实际包名。
 - 排除由管线提供的 unity_ 内置属性，修复 unity_Lightmaps 重复声明；输出 Shader 已报错时停止绑定材质。
 - 按属性类型复制普通材质值，数组槽位只接收生成的 Texture2DArray，不再整体复制源材质的 2D 贴图绑定。
 
