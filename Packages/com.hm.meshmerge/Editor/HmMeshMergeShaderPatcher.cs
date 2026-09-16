@@ -10,7 +10,7 @@ using UnityEngine;
 namespace HmMeshMergeEditor
 {
     /// <summary>
-    /// 复制来源 Shader 的文本并注入合并接入点：三个属性、hlsl 包含、查找纹理声明、索引通道、
+    /// 复制来源 Shader 的文本并注入合并接入点：四个属性、hlsl 包含、查找纹理声明、索引通道、
     /// 材质索引插值通道与每个顶点入口的可见性判断。只做插入与改名，不改写数值属性引用和贴图
     /// 取样写法，因此源 Shader 的光照、风动等自有逻辑原样保留；需要逐来源取值的位置记录在
     /// 生成文件的头部注释里，由使用者按行处理。定位不到必需元素时直接报错，不生成半成品。
@@ -55,11 +55,11 @@ namespace HmMeshMergeEditor
             InjectProperties(lines, edits);
             InjectInstancing(lines, edits);
             InjectDeclarations(lines, edits, notes);
-            AddIndexChannel(lines, edits, channel, input);
+            string indexMember = AddIndexChannel(lines, edits, channel, input);
             bool materialIndex = AddMaterialIndexChannel(lines, edits, output, notes);
             string positionMember = SemanticMember(lines, output, "SV_POSITION");
             WrapVertexFunctions(lines, edits, channel, positionMember, materialIndex,
-                StructName(lines, input.open), StructName(lines, output.open), notes);
+                StructName(lines, input.open), StructName(lines, output.open), notes, indexMember);
             return Compose(ApplyEdits(lines, edits), sourceShader, path, shaderName, channel, notes);
         }
 
@@ -161,6 +161,7 @@ namespace HmMeshMergeEditor
             edits.Add((brace + 1, new List<string>
             {
                 indent + "// HmMeshMerge 注入：激活来源索引、参数 LUT 与来源映射表。",
+                indent + "_HmMeshMergeFilterVertices(\"按索引筛选顶点\", Float) = 1",
                 indent + INDEX_PROPERTY + "(\"来源索引\", Float) = 0",
                 indent + "_HmMeshMergeParams(\"参数 LUT\", 2D) = \"white\" {}",
                 indent + "_HmMeshMergeSources(\"来源映射表\", 2D) = \"black\" {}"
@@ -231,7 +232,7 @@ namespace HmMeshMergeEditor
                     indent = Indent(lines[i]) + "    ";
                     index = i + 1;
                     notes.Add($"第 {i + 1} 行：该 HLSL 块没有 #include，声明已插到块首；若它看不到管线核心头文件，" +
-                        "请把注入的三行移到正确的 #include 之后。");
+                        "请把注入的声明移到正确的 #include 之后。");
                 }
                 else
                 {
@@ -244,42 +245,41 @@ namespace HmMeshMergeEditor
                     indent + "// HmMeshMerge 注入：索引读取与两张查找纹理；纹理由合并工具生成的材质绑定。",
                     indent + "#include \"" + HmMeshMergeShaderWriter.RuntimeIncludePath() + "\"",
                     indent + "TEXTURE2D(_HmMeshMergeParams);",
-                    indent + "TEXTURE2D(_HmMeshMergeSources);"
+                    indent + "TEXTURE2D(_HmMeshMergeSources);",
+                    indent + "float _HmMeshMergeFilterVertices;"
                 }));
             }
         }
 
-        /// <summary>给顶点输入结构体加索引通道与实例化输入；成员名固定为 meshIndex，供包装函数读取。</summary>
-        private static void AddIndexChannel(List<string> lines, List<(int index, List<string> lines)> edits,
+        /// <summary>复用已有的索引语义，否则添加 meshIndex；关闭筛选时不使用该通道的值。</summary>
+        private static string AddIndexChannel(List<string> lines, List<(int index, List<string> lines)> edits,
             HmMeshMergeChannel channel, (int open, int close, string body) span)
         {
             string semantic = channel == HmMeshMergeChannel.VertexColor
                 ? "COLOR"
                 : "TEXCOORD" + (int)channel;
-            if (Regex.IsMatch(span.body, @":\s*" + semantic + @"\b"))
-            {
-                throw new InvalidOperationException(
-                    $"来源 Shader 的顶点输入已经使用 {semantic}，与索引通道冲突。请改选其他索引通道，或关闭「尝试修改来源shader(副本)」。");
-            }
-
-            if (Regex.IsMatch(span.body, @"\bmeshIndex\b"))
+            bool hasIndexSemantic = Regex.IsMatch(span.body, @":\s*" + semantic + @"\b");
+            if (!hasIndexSemantic && Regex.IsMatch(span.body, @"\bmeshIndex\b"))
             {
                 throw new InvalidOperationException("来源 Shader 的顶点输入已有 meshIndex 成员，无法注入索引通道。请手工接入。");
             }
 
             string indent = BodyIndent(lines, span);
-            var inserted = new List<string>
+            var inserted = new List<string>();
+            if (!hasIndexSemantic)
             {
-                indent + (channel == HmMeshMergeChannel.VertexColor
+                inserted.Add(indent + (channel == HmMeshMergeChannel.VertexColor
                     ? "float4 meshIndex : COLOR;"
-                    : "float2 meshIndex : " + semantic + ";")
-            };
+                    : "float2 meshIndex : " + semantic + ";"));
+            }
+
             if (!span.body.Contains("UNITY_VERTEX_INPUT_INSTANCE_ID"))
             {
                 inserted.Add(indent + "UNITY_VERTEX_INPUT_INSTANCE_ID");
             }
 
             edits.Add((span.close, inserted));
+            return hasIndexSemantic ? SemanticMember(lines, span, semantic) : "meshIndex";
         }
 
         /// <summary>给插值结构体加材质索引通道；槽位用满时记待办并跳过。</summary>
@@ -315,7 +315,7 @@ namespace HmMeshMergeEditor
         /// <summary>把每个 #pragma vertex 指向的入口改成包装函数，在原始顶点结果上套可见性判断。</summary>
         private static void WrapVertexFunctions(List<string> lines, List<(int index, List<string> lines)> edits,
             HmMeshMergeChannel channel, string positionMember, bool materialIndex, string inputStruct,
-            string outputStruct, List<string> notes)
+            string outputStruct, List<string> notes, string indexMember)
         {
             var names = new List<string>();
             for (int i = 0; i < lines.Count; i++)
@@ -414,7 +414,7 @@ namespace HmMeshMergeEditor
                 lines[signature] = lines[signature].Substring(0, nameIndex) + internalName +
                     lines[signature].Substring(nameIndex + name.Length);
                 edits.Add((close + 1, BuildWrapper(indent, returnType, parameters, name, internalName,
-                    string.Join(", ", args), outputName, valueReturn, channel, positionMember, materialIndex)));
+                    string.Join(", ", args), outputName, valueReturn, channel, positionMember, materialIndex, indexMember)));
             }
         }
 
@@ -449,12 +449,12 @@ namespace HmMeshMergeEditor
 
         private static List<string> BuildWrapper(string indent, string returnType, string parameters, string name,
             string internalName, string args, string outputName, bool valueReturn, HmMeshMergeChannel channel,
-            string positionMember, bool materialIndex)
+            string positionMember, bool materialIndex, string indexMember)
         {
             string parameter = LastToken(parameters.Split(',')[0].Trim());
             string indexValue = channel == HmMeshMergeChannel.VertexColor
-                ? "HmMeshMergeDecodeColorIndex(" + parameter + ".meshIndex.r)"
-                : "HmMeshMergeDecodeUvIndex(" + parameter + ".meshIndex.x)";
+                ? "HmMeshMergeDecodeColorIndex(" + parameter + "." + indexMember + ".r)"
+                : "HmMeshMergeDecodeUvIndex(" + parameter + "." + indexMember + ".x)";
             var wrapper = new List<string>
             {
                 string.Empty,
@@ -474,7 +474,7 @@ namespace HmMeshMergeEditor
             }
 
             wrapper.Add(indent + "    float hmMeshIndex = HmMeshMergeLoadSourceMesh(_HmMeshMergeSources, hmSourceIndex);");
-            wrapper.Add(indent + "    if (!HmMeshMergeIsMeshVisible(" + indexValue + ", hmMeshIndex))");
+            wrapper.Add(indent + "    if (!HmMeshMergeIsMeshVisible(" + indexValue + ", hmMeshIndex, _HmMeshMergeFilterVertices))");
             wrapper.Add(indent + "    {");
             wrapper.Add(indent + "        " + outputName + "." + positionMember + " = float4(2.0, 2.0, 2.0, 1.0);");
             wrapper.Add(indent + "    }");
@@ -498,7 +498,7 @@ namespace HmMeshMergeEditor
             var text = new StringBuilder();
             text.AppendLine("// HmMeshMerge 复制来源 Shader 并注入合并接入点；下次合并会覆盖本文件，请复制到自有 Shader 后再修改。");
             text.AppendLine("// 来源：" + sourcePath + "（" + sourceShader.name + "）");
-            text.AppendLine("// 已注入：" + INDEX_PROPERTY + "、_HmMeshMergeParams、_HmMeshMergeSources 三个属性，索引读取脚本包含与两张查找纹理声明，");
+            text.AppendLine("// 已注入：" + INDEX_PROPERTY + "、_HmMeshMergeParams、_HmMeshMergeSources、_HmMeshMergeFilterVertices 四个属性，索引读取脚本包含与两张查找纹理声明，");
             text.AppendLine("// 索引通道 " + SemanticOf(channel) + "、顶点输入实例化、材质索引插值通道，以及每个顶点入口的可见性判断。");
             text.AppendLine("// 未自动改写：逐来源不同的数值属性引用与贴图取样，仍按普通材质属性读取，等于使用第一来源的值。");
             if (notes.Count == 0)

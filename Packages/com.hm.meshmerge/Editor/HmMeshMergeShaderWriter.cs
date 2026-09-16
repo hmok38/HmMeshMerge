@@ -80,7 +80,7 @@ namespace HmMeshMergeEditor
             text.AppendLine("// 模板基于 URP；其他管线保留数据契约，替换管线相关宏、变换和 Pass。");
             text.AppendLine("// 本模板只展示主贴图、主颜色、Alpha 裁剪，不模拟任意源 Shader 的完整效果。");
             text.AppendLine("// 默认激活索引是材质/实例属性 _MeshMergeIndex，含义是来源索引；不保证 SRP Batcher 兼容。");
-            text.AppendLine("// 同一个网格被多个来源使用时只存一份几何，顶点上写的是网格索引。");
+            text.AppendLine("// _HmMeshMergeFilterVertices 为 1 时按网格索引筛选；为 0 时保留原网格全部顶点。");
             text.AppendLine("// 来源到网格、材质的对应关系在 _HmMeshMergeSources（横轴为来源索引，纵轴一行）：");
             text.AppendLine("// R 是网格索引，G 是材质索引，两个索引在同一个纹素的通道里，不分成两行，一次 Load 同时取回；");
             text.AppendLine("// 数值 LUT 的横轴与纹理数组的层号都按材质索引读取，同一个材质也只占一列、一层。");
@@ -143,6 +143,7 @@ namespace HmMeshMergeEditor
         {
             text.AppendLine("    Properties");
             text.AppendLine("    {");
+            text.AppendLine("        _HmMeshMergeFilterVertices(\"按索引筛选顶点\", Float) = 1");
             text.AppendLine("        _MeshMergeIndex(\"来源索引\", Float) = 0");
             text.AppendLine("        _HmMeshMergeParams(\"来源参数 LUT\", 2D) = \"black\" {}");
             text.AppendLine("        _HmMeshMergeSources(\"来源映射表\", 2D) = \"black\" {}");
@@ -202,6 +203,7 @@ namespace HmMeshMergeEditor
             }
 
             text.AppendLine("        CBUFFER_START(UnityPerMaterial)");
+            text.AppendLine("            float _HmMeshMergeFilterVertices;");
             for (int i = 0; i < shader.GetPropertyCount(); i++)
             {
                 string name = shader.GetPropertyName(i);
@@ -332,7 +334,7 @@ namespace HmMeshMergeEditor
             text.AppendLine("            output.materialIndex = HmMeshMergeLoadSourceMaterial(_HmMeshMergeSources, " +
                 "sourceIndex);");
             text.AppendLine("            float meshIndex = HmMeshMergeLoadSourceMesh(_HmMeshMergeSources, sourceIndex);");
-            text.AppendLine($"            if (!HmMeshMergeIsMeshVisible({decode}, meshIndex))");
+            text.AppendLine($"            if (!HmMeshMergeIsMeshVisible({decode}, meshIndex, _HmMeshMergeFilterVertices))");
             text.AppendLine(@"            {
                 return false;
             }

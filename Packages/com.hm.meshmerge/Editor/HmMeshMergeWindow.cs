@@ -10,7 +10,7 @@ namespace HmMeshMergeEditor
     /// 合并窗口：绑定一份合并配置资产（HmMeshMergeAsset），直接编辑它的源列表、参数表与通道设置。
     /// 窗口本身不保存设置，避免出现配置的第二份副本；合并结果也写回同一资产。
     /// </summary>
-    internal sealed class HmMeshMergeWindow : EditorWindow
+    internal sealed partial class HmMeshMergeWindow : EditorWindow
     {
         [SerializeField] private HmMeshMergeAsset _asset;
 
@@ -60,6 +60,7 @@ namespace HmMeshMergeEditor
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
             DrawAssetSlot();
             DrawSourceList();
+            DrawMeshStatistics();
             DrawParameterTable();
             DrawSettings();
             DrawActions();
@@ -311,8 +312,14 @@ namespace HmMeshMergeEditor
         {
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("设置", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.indexChannel)),
-                new GUIContent("索引通道", "默认 UV3（TEXCOORD3），必须是所有源网格的空闲通道。"));
+            SerializedProperty mergeMeshes = _serialized.FindProperty(HmMeshMergeAsset.MERGE_MESHES_FIELD);
+            EditorGUILayout.PropertyField(mergeMeshes,
+                new GUIContent("合并网格", "默认开启。关闭后直接使用原网格，共用合并材质；来源索引保持源列表下标。"));
+            using (new EditorGUI.DisabledScope(!mergeMeshes.boolValue))
+            {
+                EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.indexChannel)),
+                    new GUIContent("索引通道", "仅合并网格时写入；默认 UV3（TEXCOORD3），必须是源网格的空闲通道。"));
+            }
             EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.outputShader)),
                 new GUIContent("输出 Shader", "留空时生成 URP 无光照接入模板；也可指定已接入数据契约的 Shader。"));
             EditorGUILayout.PropertyField(_serialized.FindProperty(nameof(HmMeshMergeAsset.patchSourceShader)),

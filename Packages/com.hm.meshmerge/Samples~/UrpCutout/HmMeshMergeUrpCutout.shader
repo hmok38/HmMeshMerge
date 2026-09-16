@@ -13,6 +13,7 @@ Shader "HmMeshMerge/URP Cutout"
     Properties
     {
         _MeshMergeIndex("来源索引", Float) = 0
+        _HmMeshMergeFilterVertices("按索引筛选顶点", Float) = 1
         _BaseMap("Base Map", 2DArray) = "" {}
         // 参数查找纹理必须在 Properties 里声明，材质才能绑定：合并工具生成的材质会把它设进来。
         _HmMeshMergeParams("Params", 2D) = "white" {}
@@ -44,6 +45,9 @@ Shader "HmMeshMerge/URP Cutout"
         SAMPLER(sampler_BaseMap);
         TEXTURE2D(_HmMeshMergeParams);
         TEXTURE2D(_HmMeshMergeSources);
+        CBUFFER_START(UnityPerMaterial)
+            float _HmMeshMergeFilterVertices;
+        CBUFFER_END
 
         struct Attributes
         {
@@ -80,7 +84,7 @@ Shader "HmMeshMerge/URP Cutout"
             float sourceIndex = HmMeshMergeGetActiveIndex();
             output.materialIndex = HmMeshMergeLoadSourceMaterial(_HmMeshMergeSources, sourceIndex);
             float meshIndex = HmMeshMergeLoadSourceMesh(_HmMeshMergeSources, sourceIndex);
-            if (!HmMeshMergeIsMeshVisible(HmMeshMergeDecodeUvIndex(input.meshIndex.x), meshIndex))
+            if (!HmMeshMergeIsMeshVisible(HmMeshMergeDecodeUvIndex(input.meshIndex.x), meshIndex, _HmMeshMergeFilterVertices))
             {
                 return false;
             }

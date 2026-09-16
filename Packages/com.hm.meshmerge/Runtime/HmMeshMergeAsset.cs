@@ -17,8 +17,12 @@ namespace HmMeshMerge
         /// <summary>序列化字段名，供编辑工具用 SerializedProperty 查找。</summary>
         public const string PARAMETERS_FIELD = "_parameters";
 
+        /// <summary>合并网格开关的序列化字段名，供编辑工具使用。</summary>
+        public const string MERGE_MESHES_FIELD = "_mergeMeshes";
+
         [SerializeField] private List<HmMeshMergeSource> _sources = new List<HmMeshMergeSource>();
         [SerializeField] private List<HmMeshMergeParameterEntry> _parameters = new List<HmMeshMergeParameterEntry>();
+        [SerializeField, Tooltip("默认合并网格；关闭后保留原网格，仅合并材质。")] private bool _mergeMeshes = true;
         [SerializeField] private Mesh _mergedMesh;
         [SerializeField] private Material _material;
 
@@ -43,7 +47,10 @@ namespace HmMeshMerge
         /// <summary>参数表：属性名与它在参数纹理里的行号。行号稳定，移除的参数保留为空行。</summary>
         public IReadOnlyList<HmMeshMergeParameterEntry> Parameters => _parameters;
 
-        /// <summary>合并后的网格；保留源顶点数据、按网格去重，并新增网格索引。</summary>
+        /// <summary>是否合并网格；修改配置后需重新执行合并才能更新输出。</summary>
+        public bool MergeMeshes => _mergeMeshes;
+
+        /// <summary>合并后的网格；仅合并材质时为 null，使用 Sources 中各来源的原网格。</summary>
         public Mesh MergedMesh => _mergedMesh;
 
         /// <summary>合并后的材质：挂载各贴图属性的合并结果与参数查找纹理。</summary>

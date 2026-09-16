@@ -11,17 +11,25 @@
 | HmMeshMergeAsset | 配置和导出结果的唯一载体，运行时按只读配置使用 |
 | HmMeshMergeSource / ParameterEntry / Channel | 来源、稳定行、索引通道的数据契约 |
 | HmMeshMergeWindow | 新建/选择配置、序列化编辑（提交即写盘）、显式重排确认、显示消息并同步 Console |
-| HmMeshMergeBuilder | 校验（贴图不一致时逐层输出可定位的日志）→ 按材质去重生成数组 → 按网格去重合并几何 → 生成 LUT 与来源映射表 → 生成/选择 Shader → 绑定并保存输出 |
+| HmMeshMergeBuilder | 校验（贴图不一致时逐层输出可定位的日志）→ 按材质去重生成数组 → 按开关决定是否合并去重几何 → 生成 LUT 与来源映射表 → 生成/选择 Shader → 绑定并保存输出 |
 | HmMeshMergeParameterWriter | 读取和比较原始值、刷新稳定参数表、生成及保存浮点 LUT |
 | HmMeshMergeTextureArrayImporter | 根据源贴图导入产物生成每层像素都有 CPU 数据的 Texture2DArray |
 | HmMeshMergeTextureSet | 生成阶段的属性名和数组引用 |
 | HmMeshMergeShaderWriter | 逐属性读取函数、URP 无光照展示及三个 Pass |
-| HmMeshMergeShaderPatcher | 复制来源 Shader 文本并注入接入点：三个属性、脚本包含与查找纹理声明、索引通道与实例化输入、材质索引插值通道、每个顶点入口的可见性包装；只插入与改名，不改写数值引用与贴图取样 |
+| HmMeshMergeShaderPatcher | 复制来源 Shader 文本并注入接入点：四个属性（含 _HmMeshMergeFilterVertices）、脚本包含与查找纹理声明、索引通道与实例化输入、材质索引插值通道、每个顶点入口的可见性包装；只插入与改名，不改写数值引用与贴图取样 |
 | HmMeshMerge.hlsl / HmMeshMergeIndex | 网格可见性判断、来源映射表与 LUT 读取；自定义路径的可选矩阵索引接口 |
 
 Runtime 编入 HmMeshMerge，不引用 UnityEditor。Editor 编入仅 Editor 平台的 HmMeshMergeEditor，只依赖 Runtime。没有新增程序集或辅助框架。
 
 ## 网格
+
+`HmMeshMergeAsset.MergeMeshes` 默认 true，窗口通过 SerializedProperty 编辑开关。关闭时跳过 BuildMergedMesh 和 SaveMeshAsset，SetResult 写入 null 网格，调用方使用 Sources 中原 Mesh 和公共输出材质。全局来源索引和来源表布局不变；原网格的全部子网格由调用方逐个绘制。旧合并网格文件不自动删除或改写，切换后需重新合并并更新宿主的网格引用。
+
+Window.MeshStatistics 在来源列表后读取当前 SerializedProperty，以复用的 HashSet 按引用去重，通过 vertexCount 与 GetIndexCount 计算总量，不复制顶点/索引数组。添加、替换、移除、清空及 Undo 后均显示当前输入统计。
+
+BuildMaterial 按开关把 `_HmMeshMergeFilterVertices` 设为 1/0；模板、注入副本和示例共用三参数 HmMeshMergeIsMeshVisible，通过参数跳过索引筛选。Shader 生成不接收该开关，不创建第二套 Shader 或关键字变体。副本复用已声明的对应语义；仅合并材质时不校验网格通道占用和顶点色的 256 网格限制。自定义 Shader 必须声明并接入新参数；双参数旧函数保留原行为。
+
+以下几何合并规则仅适用于开关开启时。
 
 - 按引用对来源网格与材质去重：顺序都按在来源列表中首次出现。同一个网格只保留一份顶点与三角形，下标就是顶点上写的网格索引；同一个材质只占 LUT 的一列与数组的一层。全部来源共用一个子网格；不会复制源对象的 Transform，各源保持自己的局部坐标。
 - 来源映射表（_SourceMap.asset）宽为来源数、高 1，RGBAFloat、线性、Point、Clamp，X 为来源索引，R 为该来源使用的网格索引，G 为该来源使用的材质索引。两个映射装在同一个纹素的 R/G 通道里，不分成两行：顶点着色器同时需要这两个索引，一次 Load 取回 float4 即可，分成两行就要两次顶点纹理获取；B、A 保留恒为零，供以后扩展。激活来源到网格、材质索引的换算由 Shader 用 HmMeshMergeLoadSourceMesh / HmMeshMergeLoadSourceMaterial 完成。
@@ -63,7 +71,7 @@ API 依据：[SetPixelData](https://docs.unity3d.com/2022.3/Documentation/Script
 
 生成模板对 HmMeshMerge.hlsl 的包含路径在生成时按当前工程解析出的包路径写入，因此嵌入包（目录名）与 git、本地安装（包名）都能编译；示例 Shader 是静态文件，只能写死当前包名。
 
-勾选「尝试修改来源shader(副本)」时走 HmMeshMergeShaderPatcher：读取来源 Shader 文本，注入三个属性、脚本包含与两张查找纹理声明、顶点输入结构体的索引通道与实例化输入、插值结构体的 nointerpolation 材质索引通道，并把每个 #pragma vertex 入口改名后追加可见性包装；相对路径的 #include 改写成工程内的完整路径。只做插入与改名，源 Shader 的光照、风动、Alpha 裁剪等逻辑原样保留，也因此不承担任意 Shader 效果的转换责任：逐来源不同的数值引用与贴图取样不自动改写，只写入生成文件头部注释的待办（数值改用 HmMeshMergeLoadParam、贴图改用 2DArray 采样）；UsePass 引用的 Pass 注入不到，同样记入待办并提示隐藏来源仍会绘制。该路径不生成纹理数组，贴图规格与数组要求的校验随之跳过，材质仍绑定参数 LUT 与来源映射表。结构上定位不到必需元素时抛错而不是产出半成品：没有同时带 POSITION 与 SV_POSITION 的结构体、没有 Properties 块、索引通道与源 Shader 已用语义冲突、顶点入口的参数或返回结构体不是注入过通道的那两个。两条路径都先校验所有来源使用同一个 Shader。
+勾选「尝试修改来源shader(副本)」时走 HmMeshMergeShaderPatcher：读取来源 Shader 文本，注入四个属性（含 _HmMeshMergeFilterVertices）、脚本包含与两张查找纹理声明、顶点输入结构体的索引通道与实例化输入、插值结构体的 nointerpolation 材质索引通道，并把每个 #pragma vertex 入口改名后追加可见性包装；相对路径的 #include 改写成工程内的完整路径。只做插入与改名，源 Shader 的光照、风动、Alpha 裁剪等逻辑原样保留，也因此不承担任意 Shader 效果的转换责任：逐来源不同的数值引用与贴图取样不自动改写，只写入生成文件头部注释的待办（数值改用 HmMeshMergeLoadParam、贴图改用 2DArray 采样）；UsePass 引用的 Pass 注入不到，同样记入待办并提示隐藏来源仍会绘制。该路径不生成纹理数组，贴图规格与数组要求的校验随之跳过，材质仍绑定参数 LUT 与来源映射表。结构上定位不到必需元素时抛错而不是产出半成品：没有同时带 POSITION 与 SV_POSITION 的结构体、没有 Properties 块、待注入的 meshIndex 成员名冲突、顶点入口的参数或返回结构体不是注入过通道的那两个。两条路径都先校验所有来源使用同一个 Shader。
 
 m33 编码作为已存在的公开接口保留，仅用于完全受控的自定义绘制：编码后不再是标准仿射矩阵，索引 0 时矩阵奇异，逆矩阵与剔除不能继续依赖普通 TRS 假设。普通验证使用材质属性路径。
 

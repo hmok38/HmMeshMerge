@@ -1,18 +1,30 @@
 ﻿# Hm Mesh Merge
 
-把共享同一 Shader 的多个模型合并为一个 Mesh 和一个材质；同一个网格只存一份几何、同一个材质只占一条数值列和一层贴图，来源与网格、材质的对应关系写在来源映射表里，绘制时按来源索引选择其中一个来源。插件不负责实例批次组织，单独合并 Mesh 不保证减少 draw call。
+把共享同一 Shader 的多个模型合并为一个材质，默认同时合并为一个 Mesh，也可关闭「合并网格」保留原网格；同一个网格只存一份几何、同一个材质只占一条数值列和一层贴图，来源与网格、材质的对应关系写在来源映射表里，绘制时按来源索引选择其中一个来源。插件不负责实例批次组织，单独合并 Mesh 不保证减少 draw call。
 
 ## 使用
 
 1. 打开 Tools/HmMeshMerge/网格合并，新建或选择保存在 Assets 内的配置资产。
 2. 添加 Mesh 与 Material。顺序就是来源索引，位置保持各源网格的局部坐标，不做排列偏移。同一个网格或同一个材质都可以被多个来源引用：几何只保留一份，材质也只占一条数值列和一层贴图，各来源仍按自己的材质取值。
 3. 点击“按源着色器列出属性”。首次把不同值排前并启用，相同值排后并停用；以后只追加新项，保留旧行号和选择。贴图 Tiling/Offset 以属性名加 _ST 加入候选。
-4. 选择所有源均未占用的索引通道，默认 **UV3（TEXCOORD3，零基编号）**。
+4. 「合并网格」默认开启，关闭则直接使用原网格。开启时选择所有源均未占用的索引通道，默认 **UV3（TEXCOORD3，零基编号）**。
 5. 可选：勾选「尝试修改来源shader(副本)」。勾选后复制来源 Shader 并注入合并接入点，保留风动、光照等自有逻辑；不勾选则生成无光照模板。两种方式都要求所有来源使用同一个 Shader，不一致会在合并前报错，细节见「复制来源 Shader（可选）」。
 6. 执行合并。纹理宽高、实际格式（含 sRGB）、mip 或采样设置不同会报错并给出建议值，**由用户手动统一，插件不修改源贴图**；每张需要修改的来源贴图各输出一条日志（同一贴图只输出一次），单击该条目即可在 Project 中定位对应贴图，最后再输出一次汇总——按贴图列出各层参数与建议，引用同一组贴图的属性共用一条。勾选「尝试修改来源shader(副本)」时不生成纹理数组，也不校验贴图规格。
-7. 使用输出 Mesh 和 Material，以材质属性或 MaterialPropertyBlock 的 _MeshMergeIndex 选择来源（该值是来源索引，不是网格索引）。生成 Shader 中的逐属性函数可复制到自有 Shader；自有 Shader 必须在 Properties 中声明 _HmMeshMergeSources（来源映射表，两个索引在同一个纹素的通道里，布局见「来源映射表布局」）与 _HmMeshMergeParams 两个 2D 属性，生成的材质会自动绑定它们。
+7. 开启网格合并时使用输出 Mesh 和 Material；关闭时使用各来源原 Mesh 与同一输出 Material，以材质属性或 MaterialPropertyBlock 的 _MeshMergeIndex 选择来源（该值是来源索引，不是网格索引）。生成 Shader 中的逐属性函数可复制到自有 Shader；自有 Shader 必须在 Properties 中声明 _HmMeshMergeSources（来源映射表，两个索引在同一个纹素的通道里，布局见「来源映射表布局」）与 _HmMeshMergeParams 两个 2D 属性，生成的材质会自动绑定它们。
 
 配置与结果都记录在同一个 HmMeshMergeAsset。停用参数使用第一来源的普通材质值，旧 LUT 行空出；只有显式“重新整理参数表”改变已有行号。改源材质数值后需要再次合并。
+
+## 合并网格开关与即时统计
+
+来源列表下即时显示按 Mesh 引用去重后的网格种数、合并后顶点数和三角形数；添加、替换、移除、清空和 Undo 后随当前列表更新。空引用忽略，非三角形子网格提示统计不完整，执行仍会报错。统计是去重几何总量，不是场景实例的提交量或性能测量。
+
+「合并网格」默认开启。关闭后重新执行合并，跳过网格生成和索引写入，`MergedMesh` 为 null；调用方使用 `Sources[i].mesh` 与输出 `Material`。90 条来源若引用 14 个 Mesh，就使用这 14 个原网格分批绘制。原网格的多个子网格都需使用输出材质绘制。
+
+两种模式共用同一套 Shader、全局来源表、材质 LUT 和纹理数组。`_MeshMergeIndex` 始终是整个配置的来源列表下标，不改为组内索引。同网格不同材质的来源仍各自读取正确参数。插件不负责宿主 renderObject、布局或实例批次重建。
+
+工具把材质 `_HmMeshMergeFilterVertices` 设为 1（合并）或 0（不合并）。关闭时忽略输入的网格索引，原网格无需空闲索引通道；Shader 副本复用已有对应语义，避免重复声明。切换开关不会产生第二种 Shader 或关键字变体。
+
+关闭后不写入或删除既有 `_Mesh.asset`，配置只清空合并网格引用；旧布局或场景必须由调用方切换为原网格后再使用新材质。「尝试修改来源shader(副本)」仍遵循原有限制，不自动完成逐来源贴图和数值读取转换。
 
 ## 生成文件与数据契约
 
@@ -20,7 +32,7 @@
 
 | 生成文件 | 类型 | 作用 |
 |---|---|---|
-| `{配置名}_Mesh.asset` | Mesh | 合并网格：去重后各源网格的局部顶点、法线、切线、顶点色、UV0–UV7，并额外写入网格索引通道 |
+| `{配置名}_Mesh.asset` | Mesh | 仅开启合并网格时生成：去重后各源网格的局部顶点、法线、切线、顶点色、UV0–UV7，并额外写入网格索引通道 |
 | `{配置名}_Material.mat` | Material | 输出材质：绑定生成的纹理数组、参数 LUT、来源映射表；普通属性取第一来源的材质值 |
 | `{配置名}_Shader.shader` | Shader | 输出 Shader：默认是生成的 URP 展示与接入模板（Properties、纹理声明、逐属性 HmRead/HmSample 函数、索引判断与 Alpha 裁剪）；勾选「尝试修改来源shader(副本)」时改为来源 Shader 的注入副本 |
 | `{配置名}_ParamLut.asset` | Texture2D | 参数 LUT：RGBAFloat、线性、无压缩、无 mip；X 为材质索引，Y 为稳定参数行，存放各来源的数值参数。无启用数值时不生成 |
@@ -61,6 +73,8 @@
 
 ## Shader 接入
 
+自定义 Shader 需在 Properties 中声明 `_HmMeshMergeFilterVertices("按索引筛选顶点", Float) = 1`，在 HLSL 中声明对应 float（按自身布局放入材质缓冲），并把所有 Pass 的顶点判断改为 `HmMeshMergeIsMeshVisible(vertexMeshIndex, activeMeshIndex, _HmMeshMergeFilterVertices)`。工具会写入 1/0，缺少该属性或类型不符时报错。旧双参数函数保留原行为，不能响应新开关。
+
 生成模板自动识别 MainTexture / MainColor 标记或 _BaseMap / _MainTex、_BaseColor / _Color 作基础展示；有 _Cutoff 时示范 Alpha 裁剪，有 _AlphaClip 时受其控制。这些仍是普通参数表项，没有独立配置字段。
 
 生成的 HmRead 和 HmSample 函数包含实际行号及贴图取法，参数是材质索引；模板要求输出 Shader 声明 `_HmMeshMergeSources`（来源映射表）和 `_HmMeshMergeParams`（参数 LUT）两个 2D 属性，否则合并报错。三个 Pass 统一处理来源选择和 Alpha 裁剪：顶点着色器先用来源映射表换出网格索引判断可见性、换出材质索引插值给片元取数值。模板不重现源 Shader 的光照、透明混合、法线解码或其他专有效果。
@@ -75,16 +89,16 @@
 
 前提与校验：所有来源必须引用同一个 Shader，不一致在合并前报错（模板路径同样如此）；来源必须是工程里的 `.shader` 资产，内置 Shader 或 ShaderGraph 无法复制，会报错并要求关闭该开关。
 
-自动注入的内容：`_MeshMergeIndex`、`_HmMeshMergeParams`、`_HmMeshMergeSources` 三个属性；`HmMeshMerge.hlsl` 的包含与两张查找纹理声明（放在每个 HLSL 块最后一个 `#include` 之后）；顶点输入结构体的索引通道与实例化输入；插值结构体的 `nointerpolation` 材质索引通道；每个 `#pragma vertex` 入口的可见性包装（先调用改名后的原函数，再按来源映射表把不属于本网格的顶点移出裁剪空间）。相对路径的 `#include` 会改写成工程内的完整路径，复制到配置目录后仍能找到文件。
+自动注入的内容：`_MeshMergeIndex`、`_HmMeshMergeParams`、`_HmMeshMergeSources`、`_HmMeshMergeFilterVertices` 四个属性；`HmMeshMerge.hlsl` 的包含与两张查找纹理声明（放在每个 HLSL 块最后一个 `#include` 之后）；顶点输入结构体的索引通道（已有相同语义时复用该成员）与实例化输入；插值结构体的 `nointerpolation` 材质索引通道；每个 `#pragma vertex` 入口的可见性包装（先调用改名后的原函数，再按来源映射表把不属于本网格的顶点移出裁剪空间）。相对路径的 `#include` 会改写成工程内的完整路径，复制到配置目录后仍能找到文件。
 
 不自动改写、列在生成文件头部注释「待人工处理」里的内容：
 
 - 逐来源不同的数值参数仍按普通材质属性读取，等于使用第一来源的值。需要逐来源时改成 `HmMeshMergeLoadParam(_HmMeshMergeParams, input.materialIndex, 行号)`，行号由注释给出（参数 LUT 已生成并绑定）。
 - 逐来源不同的贴图不生成数组，材质使用第一来源的贴图。需要逐来源时把属性改成 `2DArray`，采样改成 `SAMPLE_TEXTURE2D_ARRAY(贴图, 采样器, uv, (uint)round(input.materialIndex))`。
 - `UsePass` 引用的 Pass（无光照模板之外常见的影子、深度）注入不到，没有可见性判断，隐藏来源仍会绘制它们；需要按本文件的顶点入口自行补上，或改用自带的 Pass。
-- 索引通道选顶点色时会覆盖 `COLOR`；源 Shader 若把顶点色当遮罩（例如风动的顶点权重），需要改用其他索引通道。
+- 合并网格且索引通道选顶点色时会覆盖 `COLOR`；源 Shader 若把顶点色当遮罩（例如风动的顶点权重），需要改用其他索引通道。
 
-结构上定位不到必需元素时直接报错，不生成半成品：没有同时带 POSITION 与 SV_POSITION 语义的结构体、没有 Properties 块、索引通道与源 Shader 已用语义冲突、顶点入口的参数或返回结构体不是注入过通道的那两个，都会中止合并并说明原因。此时关闭开关用模板，或手工接入后把自有 Shader 填进「输出 Shader」。
+结构上定位不到必需元素时直接报错，不生成半成品：没有同时带 POSITION 与 SV_POSITION 语义的结构体、没有 Properties 块、待注入的 meshIndex 成员名冲突、顶点入口的参数或返回结构体不是注入过通道的那两个，都会中止合并并说明原因。此时关闭开关用模板，或手工接入后把自有 Shader 填进「输出 Shader」。
 
 包装函数走实例化读法，因此会给每个 Pass 补 `#pragma multi_compile_instancing`；未开实例化的绘制下 `_MeshMergeIndex` 仍按普通常量缓冲读取，用法与模板一致。
 

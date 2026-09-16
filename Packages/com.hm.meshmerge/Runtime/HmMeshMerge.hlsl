@@ -86,6 +86,13 @@ bool HmMeshMergeIsMeshVisible(float vertexMeshIndex, float activeMeshIndex)
     return abs(vertexMeshIndex - activeMeshIndex) < 0.5;
 }
 
+// filterVertices 由材质 _HmMeshMergeFilterVertices 传入：0 保留原网格的全部顶点，1 按索引筛选。
+// 保留双参数版本供已有自定义 Shader 使用；新接入必须传第三个参数。
+bool HmMeshMergeIsMeshVisible(float vertexMeshIndex, float activeMeshIndex, float filterVertices)
+{
+    return filterVertices < 0.5 || HmMeshMergeIsMeshVisible(vertexMeshIndex, activeMeshIndex);
+}
+
 // 取某来源的一行参数：paramsTexture 是合并工具写入的参数查找纹理（横轴为来源索引，
 // 纵轴为参数表的行；生成的材质把它绑在 _HmMeshMergeParams 上），materialIndex 是顶点
 // 着色器换出的材质索引，row 是参数表里的行号。取值走 Load 的整数坐标，不需要采样器。

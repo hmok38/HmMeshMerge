@@ -16,6 +16,9 @@ namespace HmMeshMergeEditor
         /// <summary>生成的来源映射表属性名；与生成 Shader 里的声明保持一致。</summary>
         internal const string SOURCE_TABLE_NAME = "_HmMeshMergeSources";
 
+        /// <summary>是否按来源筛选顶点的材质属性；合并网格为 1，仅合并材质为 0。</summary>
+        internal const string FILTER_VERTICES_NAME = "_HmMeshMergeFilterVertices";
+
         public static List<string> Validate(HmMeshMergeAsset asset)
         {
             var errors = new List<string>();
@@ -56,7 +59,7 @@ namespace HmMeshMergeEditor
             {
                 string propertyName = sourceShader.GetPropertyName(i);
                 if (propertyName == "_MeshMergeIndex" || propertyName == HmMeshMergeParameterWriter.TEXTURE_NAME ||
-                    propertyName == SOURCE_TABLE_NAME)
+                    propertyName == SOURCE_TABLE_NAME || propertyName == FILTER_VERTICES_NAME)
                 {
                     errors.Add($"源 Shader 的 {propertyName} 与插件保留属性冲突。");
                 }
@@ -195,7 +198,8 @@ namespace HmMeshMergeEditor
                 return;
             }
 
-            if (asset.indexChannel == HmMeshMergeChannel.VertexColor && CollectMeshes(asset.Sources).Count > 256)
+            if (asset.MergeMeshes && asset.indexChannel == HmMeshMergeChannel.VertexColor &&
+                CollectMeshes(asset.Sources).Count > 256)
             {
                 errors.Add("索引写入顶点色时网格数量不能超过 256。");
             }
@@ -227,7 +231,7 @@ namespace HmMeshMergeEditor
                     errors.Add($"{mesh.name}：网格没有顶点。");
                 }
 
-                if (mesh.HasVertexAttribute(attribute))
+                if (asset.MergeMeshes && mesh.HasVertexAttribute(attribute))
                 {
                     errors.Add($"{mesh.name}：索引通道 {asset.indexChannel} 已被源数据占用。");
                 }
@@ -306,12 +310,16 @@ namespace HmMeshMergeEditor
                 List<HmMeshMergeTextureSet> sets = asset.patchSourceShader
                     ? new List<HmMeshMergeTextureSet>()
                     : BuildTextureSets(asset, folder, name, materials);
-                mesh = BuildMergedMesh(meshes, asset.indexChannel, name);
+                if (asset.MergeMeshes)
+                {
+                    mesh = BuildMergedMesh(meshes, asset.indexChannel, name);
+                }
+
                 parameters = HmMeshMergeParameterWriter.Build(materials, asset.Parameters);
                 sourceTable = BuildSourceTable(sources, meshes, materials);
                 Shader shader = ResolveOutputShader(asset, sources, meshes, materials, sets, folder, name);
-                material = BuildMaterial(shader, sources[0].material, sets, parameters, sourceTable);
-                Mesh savedMesh = SaveMeshAsset(mesh, $"{folder}/{name}_Mesh.asset");
+                material = BuildMaterial(shader, sources[0].material, sets, parameters, sourceTable, asset.MergeMeshes);
+                Mesh savedMesh = mesh == null ? null : SaveMeshAsset(mesh, $"{folder}/{name}_Mesh.asset");
                 Texture2D savedParameters = HmMeshMergeParameterWriter.Save(parameters, name, folder);
                 if (material.HasProperty(HmMeshMergeParameterWriter.TEXTURE_NAME))
                 {
@@ -670,7 +678,7 @@ namespace HmMeshMergeEditor
                     string.Join("、", rows) + "。本次仍按普通材质属性读取，等于使用第一来源的值；参数 LUT 已生成并绑定。");
             }
 
-            if (asset.indexChannel == HmMeshMergeChannel.VertexColor)
+            if (asset.MergeMeshes && asset.indexChannel == HmMeshMergeChannel.VertexColor)
             {
                 notes.Add("索引通道是顶点色：合并会覆盖 COLOR，源 Shader 里把顶点色当遮罩的用法需要改用其他通道。");
             }
@@ -743,7 +751,7 @@ namespace HmMeshMergeEditor
         }
 
         private static Material BuildMaterial(Shader shader, Material source,
-            List<HmMeshMergeTextureSet> sets, Texture2D parameters, Texture2D sourceTable)
+            List<HmMeshMergeTextureSet> sets, Texture2D parameters, Texture2D sourceTable, bool mergeMeshes)
         {
             if (ShaderUtil.ShaderHasError(shader))
             {
@@ -790,6 +798,16 @@ namespace HmMeshMergeEditor
                     throw new InvalidOperationException($"输出 Shader 必须声明 2D 贴图属性 {SOURCE_TABLE_NAME}。");
                 }
 
+                int filterIndex = shader.FindPropertyIndex(FILTER_VERTICES_NAME);
+                if (filterIndex < 0 ||
+                    (shader.GetPropertyType(filterIndex) != ShaderPropertyType.Float &&
+                        shader.GetPropertyType(filterIndex) != ShaderPropertyType.Range))
+                {
+                    throw new InvalidOperationException($"输出 Shader 必须声明 Float 属性 {FILTER_VERTICES_NAME}，" +
+                        "并在所有 Pass 的顶点筛选处使用它。请更新自定义 Shader 后重新合并。");
+                }
+
+                material.SetFloat(FILTER_VERTICES_NAME, mergeMeshes ? 1f : 0f);
                 material.SetTexture(SOURCE_TABLE_NAME, sourceTable);
                 return material;
             }
