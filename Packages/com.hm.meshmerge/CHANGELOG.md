@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 2026-10-09 原生数组生成修正
+
+- PNG 不再统一写 RGBA：所有源文件无 Alpha 时写 RGB，任一来源有 Alpha 时保留 RGBA，避免新增 Alpha 影响 Automatic 平台格式选型；HDR / 高精度 EXR 路径保持不变。
+- 每个数组内同一源贴图只读取一次并填入全部对应材质层，减少重复临时导入；数组层数、层号与不同属性的独立输出保持不变，不缓存全部源图像素。
+- 已有输出需人工重新合并后更新；源贴图、生成资产和平台设置未在此次代码修改中改写。
+
 ### 2026-10-09 原生纹理数组
 
 - 按用户新决定移除 `.hmtexarray` ScriptedImporter，改为 PNG / 浮点 EXR 分格源图加 Unity 原生 TextureImporter（Texture Shape = 2D Array、Columns / Rows）。

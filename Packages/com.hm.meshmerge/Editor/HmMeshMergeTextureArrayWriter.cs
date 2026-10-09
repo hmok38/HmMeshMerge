@@ -32,15 +32,8 @@ namespace HmMeshMergeEditor
             {
                 AssetDatabase.CreateFolder("Assets", Path.GetFileName(temporaryFolder));
                 sheet = new Texture2D(master.width * columns, master.height * rows,
-                    hdr ? TextureFormat.RGBAFloat : TextureFormat.RGBA32, false, true);
-                for (int layer = 0; layer < textures.Count; layer++)
-                {
-                    Color[] pixels = ReadSourcePixels(textures[layer], temporaryFolder);
-                    // 原生 flipbook 从左上角逐行取层；SetPixels 的原点在左下角。
-                    int x = layer % columns * master.width;
-                    int y = (rows - 1 - layer / columns) * master.height;
-                    sheet.SetPixels(x, y, master.width, master.height, pixels);
-                }
+                    hdr ? TextureFormat.RGBAFloat : GetPngFormat(textures), false, true);
+                FillSheet(sheet, textures, columns, rows, temporaryFolder);
 
                 byte[] bytes = hdr
                     ? sheet.EncodeToEXR(Texture2D.EXRFlags.OutputAsFloat | Texture2D.EXRFlags.CompressZIP)
@@ -87,6 +80,49 @@ namespace HmMeshMergeEditor
                 if (AssetDatabase.IsValidFolder(temporaryFolder) && !AssetDatabase.DeleteAsset(temporaryFolder))
                 {
                     Debug.LogWarning($"临时贴图目录清理失败，请手动删除：{temporaryFolder}");
+                }
+            }
+        }
+
+        private static TextureFormat GetPngFormat(IReadOnlyList<Texture2D> textures)
+        {
+            // 按所有源文件的通道判断，不能因 Alpha 当前全不透明就丢弃，也不能给 RGB 来源补出 Alpha。
+            foreach (Texture2D texture in textures)
+            {
+                if (GetImporter(texture).DoesSourceTextureHaveAlpha())
+                {
+                    return TextureFormat.RGBA32;
+                }
+            }
+
+            return TextureFormat.RGB24;
+        }
+
+        private static void FillSheet(Texture2D sheet, IReadOnlyList<Texture2D> textures, int columns, int rows,
+            string temporaryFolder)
+        {
+            var written = new HashSet<Texture2D>();
+            for (int firstLayer = 0; firstLayer < textures.Count; firstLayer++)
+            {
+                Texture2D source = textures[firstLayer];
+                if (!written.Add(source))
+                {
+                    continue;
+                }
+
+                // 同一源图只解码一次并写满对应层；层号仍是材质索引，不合并重复层。
+                Color[] pixels = ReadSourcePixels(source, temporaryFolder);
+                for (int layer = firstLayer; layer < textures.Count; layer++)
+                {
+                    if (textures[layer] != source)
+                    {
+                        continue;
+                    }
+
+                    // 原生 flipbook 从左上角逐行取层；SetPixels 的原点在左下角。
+                    int x = layer % columns * source.width;
+                    int y = (rows - 1 - layer / columns) * source.height;
+                    sheet.SetPixels(x, y, source.width, source.height, pixels);
                 }
             }
         }

@@ -59,8 +59,8 @@ BuildMaterial 按开关把 `_HmMeshMergeFilterVertices` 设为 1/0；模板、�
 
 1. 保留按层报告与按贴图去重的可定位日志。校验每个来源是原生 TextureImporter 资产，实际宽高、格式（含 sRGB）、mip、采样与像素处理设置一致；支持 Default、Normal Map、Single Channel。尺寸不一致只报错并给出建议尺寸，用户手工统一。
 2. 在设备上限与 16384 的较小值内，寻找面积恰好等于层数、最大边尽量小的矩形网格。不会补空层，因此大质数层数可能只能排成长条；超限报错，不缩小来源。
-3. 为当前一次生成创建唯一临时目录，按层复制原始源文件，使用原生 TextureImporter 无压缩解码为可读 2D。临时副本只应用来源已配置的尺寸、NPOT、缩放算法与输入色彩设置，法线打包、Alpha 处理、Swizzle 留给最终数组。源贴图无需开启 Read/Write，Crunch 不再作为输入禁用条件。Packages 来源先通过 PackageInfo 解析真实磁盘位置。
-4. 按左上到右下的材质顺序放入分格图。普通输出保留 8 位 RGBA，浮点输出使用 32 位 EXR；不复用源图已压缩的 mip 数据，最终 mip 与压缩由 Unity 重新生成。
+3. 为当前一次生成创建唯一临时目录，在单个数组内按 Texture2D 引用去重读取：同一源图只复制、无压缩解码一次，立即填入其所有材质层，再读取下一张；不缓存全部源图像素，不跨属性缓存。临时副本只应用来源已配置的尺寸、NPOT、缩放算法与输入色彩设置，法线打包、Alpha 处理、Swizzle 留给最终数组。源贴图无需开启 Read/Write，Crunch 不再作为输入禁用条件。Packages 来源先通过 PackageInfo 解析真实磁盘位置。
+4. 按左上到右下的材质顺序放入分格图，读取去重不改变层数和层号。普通 PNG 使用 8 位 RGB / RGBA：检查全部来源的 DoesSourceTextureHaveAlpha，全部无 Alpha 才写 RGB，任一有 Alpha 就保留 RGBA，不按透明像素数量判断，避免凭空新增 Alpha 改变 Automatic 平台格式选型。浮点输出仍使用 32 位 RGBA EXR；不复用源图已压缩的 mip 数据，最终 mip 与压缩由 Unity 重新生成。
 5. 输出导入器继承第 0 层的像素处理和采样设置，固定为 2DArray，关闭 Read/Write、Streaming Mipmaps，关闭 NPOT 缩放并忽略 Mipmap Limit。首次生成复制来源全部平台格式并关闭输出 Crunch，Max Size 设置到足以容纳源图；后续保留用户对输出数组的平台设置。
 6. 同步导入后检查错误日志、Texture2DArray 类型、宽高、层数、mip 数及色彩空间；失败不返回数组给材质绑定。临时像素对象和临时副本目录在 finally 中清理，清理失败提示路径。
 
