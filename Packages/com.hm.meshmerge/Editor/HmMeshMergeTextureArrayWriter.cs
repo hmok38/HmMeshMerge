@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEditor.AssetImporters;
-using UnityEditor.PackageManager;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using Object = UnityEngine.Object;
+using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace HmMeshMergeEditor
 {
