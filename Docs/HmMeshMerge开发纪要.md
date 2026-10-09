@@ -9,6 +9,8 @@
 - 原始需求文件：C:/Users/HM/Documents/HmMeshMerge-插件需求定稿.md
 - 记录口径：区分用户确认的需求、当前源码实现、用户实际报错和待验证事项；不把静态检查视为运行验收。
 
+> 2026-10-09 补记：数组生成方案已按用户新决定改为 Unity 原生 2D Array。第一至十二节保留此前开发记录；当前数组实现与迁移边界以第十三节及插件设计说明为准。
+
 ## 一、背景与目标
 
 初版插件由其他 AI 开发。用户认为实现存在问题，要求接手、优化和重构。
@@ -352,3 +354,31 @@ unity_ 内置属性交给管线头文件声明和绑定，不再重复生成。�
 - [URP 示例说明](../Packages/com.hm.meshmerge/Samples~/UrpCutout/README.md)
 
 本纪要用于记录本轮需求、实现与联调过程；后续继续开发时，应同时核对当前源码和最新用户决定。
+
+## 十三、2026-10-09：改用 Unity 原生 2D Array
+
+### 用户新决定
+
+移除对 `HmMeshMergeTextureArrayImporter.cs` 的依赖，按 Unity 原生贴图的 `Texture Shape = 2D Array` 生成资源。此决定替代原先“不保留 flipbook”的约定；尺寸不一致只报错、由用户手工统一的要求继续有效。
+
+### 实现与职责
+
+- 删除 ScriptedImporter 和 `.hmtexarray` 生成链，将该模块改为 `HmMeshMergeTextureArrayWriter` 静态生成器；Builder 保留属性分组、按材质去重、独立属性绑定与错误日志。
+- 原生数组需要分格源图。普通数据写 PNG，HDR / 高精度未压缩数据写浮点 EXR；按材质索引从左上到右下排列，Columns × Rows 严格等于层数。网格 UV、来源映射与 Shader 数组采样接口不变。
+- 读取临时源文件副本以取得未压缩像素，不修改源导入设置；源法线、Alpha、Swizzle 等处理由输出原生导入器执行。所有临时资源在 finally 中清理。
+- 第一次生成继承第 0 层的导入与平台格式设置，关闭输出 Crunch；后续保留数组的平台覆盖设置。导入结果会检查类型、尺寸、深度、mip 与 sRGB；异常仍中止合并。
+- 原生文件是来源的快照；改源贴图、源导入设置或材质顺序后需再次合并。生成源图有整图尺寸上限，不再宣称只受数组层数限制。详细调用和失败边界见[当前设计说明](../Packages/com.hm.meshmerge/Documentation~/Design.md#纹理数组)。
+
+### 本仓库资源迁移
+
+`Assets/HmMeshMerge_Array_BaseMap.hmtexarray` 与 `Assets/HmMeshMerge_Array_MainTex.hmtexarray` 已替换为同名前缀的 PNG；保留各自 GUID，输出材质的 local file ID 更新为原生 Texture2DArray 的 18700000，旧 ScriptedImporter meta 一并删除。
+
+当前来源文件分别为 512×512 与 1024×1024；后者已有 Max Size = 512，实际导入尺寸统一为 512。迁移文件为 1024×512、2 列 1 行；离线缩小使用 Pillow Lanczos，不等同 Unity 原生重采样。没有运行 Unity，因此这两份迁移资源仍需人工执行一次合并，以原生生成结果覆盖并验证。
+
+其他工程升级时重新合并，输出材质会回绑新文件；若其他资产直接引用旧数组，需要手动换绑后再清理旧文件。生成器不全工程扫描或删除历史产物。
+
+### 验证范围
+
+仅做源码/API 静态核对、C# 语法解析、差异检查与资源引用/PNG 尺寸检查。未启动 Unity、触发脚本 Reload、导入、执行 Unity 测试或构建。需人工检查层顺序与朝向、法线/Alpha/HDR、二次生成的平台设置、切平台后的尺寸与格式，以及临时目录清理。
+
+**代码未编译，由用户人工编译验证。**

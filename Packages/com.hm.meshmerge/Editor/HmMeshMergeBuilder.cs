@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using HmMeshMerge;
 using UnityEditor;
-using UnityEditor.AssetImporters;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Object = UnityEngine.Object;
@@ -86,7 +85,7 @@ namespace HmMeshMergeEditor
             var problems = new List<(Texture2D texture, string advice)>();
             foreach ((List<string> names, List<Texture2D> textures) group in GroupTextureParameters(asset))
             {
-                if (!HmMeshMergeTextureArrayImporter.ValidateTextures(group.textures, out string reason,
+                if (!HmMeshMergeTextureArrayWriter.ValidateTextures(group.textures, out string reason,
                     out var layerProblems))
                 {
                     problems.AddRange(layerProblems);
@@ -309,7 +308,7 @@ namespace HmMeshMergeEditor
                 // 复制来源 Shader 时贴图仍是 2D 取样，不能绑定 Texture2DArray，因此不生成数组。
                 List<HmMeshMergeTextureSet> sets = asset.patchSourceShader
                     ? new List<HmMeshMergeTextureSet>()
-                    : BuildTextureSets(asset, folder, name, materials);
+                    : BuildTextureSets(asset, folder, name);
                 if (asset.MergeMeshes)
                 {
                     mesh = BuildMergedMesh(meshes, asset.indexChannel, name);
@@ -357,71 +356,25 @@ namespace HmMeshMergeEditor
             }
         }
 
-        private static List<HmMeshMergeTextureSet> BuildTextureSets(HmMeshMergeAsset asset, string folder, string name,
-            List<Material> materials)
+        private static List<HmMeshMergeTextureSet> BuildTextureSets(HmMeshMergeAsset asset, string folder, string name)
         {
             var sets = new List<HmMeshMergeTextureSet>();
             List<string> properties = TextureParameters(asset);
             foreach (string propertyName in properties)
             {
                 string suffix = propertyName.TrimStart('_');
-                string path = $"{folder}/{name}_Array_{suffix}.{HmMeshMergeTextureArrayImporter.EXTENSION}";
+                string path = $"{folder}/{name}_Array_{suffix}";
                 foreach (string other in properties)
                 {
                     if (other != propertyName && other.TrimStart('_').Equals(suffix, StringComparison.OrdinalIgnoreCase))
                     {
                         // 同名文件冲突时按属性行区分；普通属性沿用既有路径和 GUID。
                         int propertyIndex = asset.Sources[0].material.shader.FindPropertyIndex(propertyName);
-                        path = $"{folder}/{name}_Array_{suffix}_{propertyIndex}." +
-                            HmMeshMergeTextureArrayImporter.EXTENSION;
+                        path = $"{folder}/{name}_Array_{suffix}_{propertyIndex}";
                         break;
                     }
                 }
-                if (!File.Exists(path))
-                {
-                    File.WriteAllText(path, string.Empty);
-                    AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
-                }
-
-                var importer = AssetImporter.GetAtPath(path) as HmMeshMergeTextureArrayImporter;
-                if (importer == null)
-                {
-                    throw new InvalidOperationException($"未找到纹理数组导入器：{path}");
-                }
-
-                using (var serialized = new SerializedObject(importer))
-                {
-                    SerializedProperty list = serialized.FindProperty(HmMeshMergeTextureArrayImporter.TEXTURES_FIELD);
-                    list.arraySize = materials.Count;
-                    for (int i = 0; i < materials.Count; i++)
-                    {
-                        list.GetArrayElementAtIndex(i).objectReferenceValue =
-                            materials[i].GetTexture(propertyName);
-                    }
-
-                    serialized.ApplyModifiedPropertiesWithoutUndo();
-                }
-
-                EditorUtility.SetDirty(importer);
-                importer.SaveAndReimport();
-                ImportLog importLog = AssetImporter.GetImportLog(path);
-                if (importLog != null)
-                {
-                    foreach (ImportLog.ImportLogEntry entry in importLog.logEntries)
-                    {
-                        if ((entry.flags & ImportLogFlags.Error) != 0)
-                        {
-                            throw new InvalidOperationException($"纹理数组导入失败：{path}\n{entry.message}");
-                        }
-                    }
-                }
-
-                var array = AssetDatabase.LoadAssetAtPath<Texture2DArray>(path);
-                if (array == null)
-                {
-                    throw new InvalidOperationException($"纹理数组导入失败：{path}。请查看 Console。");
-                }
-
+                Texture2DArray array = HmMeshMergeTextureArrayWriter.Build(CollectTextures(asset, propertyName), path);
                 sets.Add(new HmMeshMergeTextureSet { propertyName = propertyName, texture = array });
             }
 

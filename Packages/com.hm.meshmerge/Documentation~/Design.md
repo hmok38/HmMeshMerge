@@ -1,6 +1,6 @@
 ﻿# HmMeshMerge 设计说明
 
-当前契约以用户需求定稿及本次确认的“尺寸不一致只报错并给出建议尺寸，用户手工统一”为准。旧图集、flipbook、顶点外观参数和默认顶点色方案已作废。
+当前契约以用户需求定稿及本次确认的“尺寸不一致只报错并给出建议尺寸，用户手工统一”为准。2026-10-09 按用户新决定，数组统一采用原生 flipbook 导入；旧 .hmtexarray ScriptedImporter 已移除。图集 UV 重映射、顶点外观参数和默认顶点色方案仍不采用。
 
 ## 主链与职责
 
@@ -13,7 +13,7 @@
 | HmMeshMergeWindow | 新建/选择配置、序列化编辑（提交即写盘）、显式重排确认、显示消息并同步 Console |
 | HmMeshMergeBuilder | 校验（贴图不一致时逐层输出可定位的日志）→ 按材质去重生成数组 → 按开关决定是否合并去重几何 → 生成 LUT 与来源映射表 → 生成/选择 Shader → 绑定并保存输出 |
 | HmMeshMergeParameterWriter | 读取和比较原始值、刷新稳定参数表、生成及保存浮点 LUT |
-| HmMeshMergeTextureArrayImporter | 根据源贴图导入产物生成每层像素都有 CPU 数据的 Texture2DArray |
+| HmMeshMergeTextureArrayWriter | ValidateTextures / Build：校验、解码临时源图副本、拼图、配置原生 TextureImporter 并检查结果 |
 | HmMeshMergeTextureSet | 生成阶段的属性名和数组引用 |
 | HmMeshMergeShaderWriter | 逐属性读取函数、URP 无光照展示及三个 Pass |
 | HmMeshMergeShaderPatcher | 复制来源 Shader 文本并注入接入点：四个属性（含 _HmMeshMergeFilterVertices）、脚本包含与查找纹理声明、索引通道与实例化输入、材质索引插值通道、每个顶点入口的可见性包装；只插入与改名，不改写数值引用与贴图取样 |
@@ -53,13 +53,20 @@ BuildMaterial 按开关把 `_HmMeshMergeFilterVertices` 设为 1/0；模板、�
 
 只有启用且引用不同的二维贴图属性生成数组。层按去重后的材质排列：同一个材质只占一层，因此材质被多个来源复用时不会把同一张贴图重复放进数组。不同属性分别绑定，不能因当前引用相同就抹去一个属性。引用相同的纹理保持原始维度和原始材质引用。
 
-.hmtexarray 源文件为空，贴图引用按顺序存在其 .meta 导入设置中。Importer 对有效来源先声明 DependsOnArtifact，随后校验和生成；错误时也保留已知依赖，便于源贴图修复后再次导入。
+`BuildTextureSets → HmMeshMergeTextureArrayWriter.Build` 生成 PNG（普通贴图）或浮点 EXR（HDR / 高精度未压缩贴图），然后配置原生 TextureImporter：`textureShape = Texture2DArray`，在 TextureImporterSettings 中设置 `flipbookColumns` 与 `flipbookRows`。生成资源不再需要插件的导入回调或 DependsOnArtifact。
 
-校验实际宽高、graphicsFormat（包含 sRGB）、mip 层数和采样设置；不以压缩设置名称替代实际格式。任一参数不一致只在点击“执行合并”时报出明细：按层贴图逐条列出参数，需要修改的层在原条目内直接跟“建议”，引用同一组贴图的属性（如 _BaseMap 与 _MainTex 指向同一批贴图）并列属性名、共用一条报告；数组资产重导（改源贴图、切平台、打开工程）时只记录一行“未生成数组”的提示，不在非合并时机刷出长清单。需要修改的贴图在校验结束时按贴图合并建议并去重，每张贴图只出一条携带贴图对象的日志（不含属性名与层号），单击该条即可在 Project 中定位对应贴图；校验失败的汇总仍只输出一次，异常本身不再重复打印。插件不缩放、不改源导入设置，由用户手动统一。来源需手动开启 Read/Write，Crunch 需关闭。数组按实际 TextureFormat、mip 数与线性标识创建；发生格式回退即报错。逐层逐 mip 的 GetPixelData / SetPixelData 写入 CPU 数据后 Apply，避免只复制 GPU 内容却缺少可保存像素。
+生成步骤：
 
-源贴图和输出数组保留 CPU 数据以满足导入与保存，需要计入内存开销。切换目标平台后的格式由实际源导入产物决定；未出包验证前不声称 Android 一定是 ASTC。
+1. 保留按层报告与按贴图去重的可定位日志。校验每个来源是原生 TextureImporter 资产，实际宽高、格式（含 sRGB）、mip、采样与像素处理设置一致；支持 Default、Normal Map、Single Channel。尺寸不一致只报错并给出建议尺寸，用户手工统一。
+2. 在设备上限与 16384 的较小值内，寻找面积恰好等于层数、最大边尽量小的矩形网格。不会补空层，因此大质数层数可能只能排成长条；超限报错，不缩小来源。
+3. 为当前一次生成创建唯一临时目录，按层复制原始源文件，使用原生 TextureImporter 无压缩解码为可读 2D。临时副本只应用来源已配置的尺寸、NPOT、缩放算法与输入色彩设置，法线打包、Alpha 处理、Swizzle 留给最终数组。源贴图无需开启 Read/Write，Crunch 不再作为输入禁用条件。Packages 来源先通过 PackageInfo 解析真实磁盘位置。
+4. 按左上到右下的材质顺序放入分格图。普通输出保留 8 位 RGBA，浮点输出使用 32 位 EXR；不复用源图已压缩的 mip 数据，最终 mip 与压缩由 Unity 重新生成。
+5. 输出导入器继承第 0 层的像素处理和采样设置，固定为 2DArray，关闭 Read/Write、Streaming Mipmaps，关闭 NPOT 缩放并忽略 Mipmap Limit。首次生成复制来源全部平台格式并关闭输出 Crunch，Max Size 设置到足以容纳源图；后续保留用户对输出数组的平台设置。
+6. 同步导入后检查错误日志、Texture2DArray 类型、宽高、层数、mip 数及色彩空间；失败不返回数组给材质绑定。临时像素对象和临时副本目录在 finally 中清理，清理失败提示路径。
 
-API 依据：[SetPixelData](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/Texture2DArray.SetPixelData.html)、[Texture2DArray 构造器](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/Texture2DArray-ctor.html)。
+原生数组依赖分格源图快照，不自动追踪独立源图；修改源内容、尺寸或来源顺序后需要再次合并。切平台时 Unity 按数组自己的平台设置导入快照，源图在新平台有不同尺寸时重新合并会重新校验。已有输出的自定义平台 Max Size 若造成缩小，合并会报错，需用户调整。导出仍不是文件事务，中途失败可能已改写部分源图。
+
+API 依据：[Unity 2022.3 纹理数组导入](https://docs.unity3d.com/2022.3/Documentation/Manual/class-Texture2DArray.html)、[TextureImporterSettings.flipbookColumns](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/TextureImporterSettings-flipbookColumns.html)、[TextureImporterSettings.flipbookRows](https://docs.unity3d.com/2022.3/Documentation/ScriptReference/TextureImporterSettings-flipbookRows.html)。
 
 ## Shader 与集成边界
 
@@ -79,16 +86,24 @@ m33 编码作为已存在的公开接口保留，仅用于完全受控的自定�
 
 ## 资产、失败与迁移
 
-- 输出位于配置资产目录，命名规则为「配置名_角色.扩展名」：_Mesh.asset（合并网格）、_Material.mat（输出材质）、_Shader.shader（生成的着色器）、_ParamLut.asset（参数 LUT）、_SourceMap.asset（来源映射表）、_Array_{属性名}.hmtexarray（纹理数组，属性名去掉下划线后重名时追加属性行号）。Mesh、Material、浮点 LUT、来源映射表原地 CopySerialized，保持 GUID。Shader 在文件里的名字是「HmMeshMerge/配置名」，工程里有同名配置时按资产路径顺序补 1 起的序号，避免同名 Shader 互相顶替（见下）。
-- 普通数组路径沿用旧命名；仅属性文件名冲突时增加标识。源 Shader 的插件保留名冲突在生成前报错。
+- 输出位于配置资产目录，命名规则为「配置名_角色.扩展名」：_Mesh.asset（合并网格）、_Material.mat（输出材质）、_Shader.shader（生成的着色器）、_ParamLut.asset（参数 LUT）、_SourceMap.asset（来源映射表）、_Array_{属性名}.png / .exr（纹理数组，属性名去掉下划线后重名时追加属性行号）。Mesh、Material、浮点 LUT、来源映射表原地 CopySerialized，保持 GUID。Shader 在文件里的名字是「HmMeshMerge/配置名」，工程里有同名配置时按资产路径顺序补 1 起的序号，避免同名 Shader 互相顶替（见下）。
+- 数组文件名沿用原前缀并更换扩展名；仅属性文件名冲突时增加标识。源 Shader 的插件保留名冲突在生成前报错。
 - 自定义输出 Shader 的数组维度、LUT 属性和来源映射表属性必须满足契约，否则报错。输出 Shader 已有编译错误时，停止创建材质。普通参数按类型逐项复制，转换为数组的槽位跳过源 2D 贴图绑定，只接收生成数组。
 - 复制来源 Shader 时输出 Shader 是来源的注入副本，属性与源一致，因此普通参数的类型校验恒等通过，也不生成数组；来源必须是工程内的 .shader 资产，内置 Shader 与 ShaderGraph 报错。生成文件每次合并都被覆盖，长期修改需另存为自有 Shader。
 - Shader 名不用配置 GUID，也不用时间戳：名字里出现哈希既不可读，也会在每次换机器、换配置时变化。只在工程里存在同名配置（同一个配置文件名的多个配置资产）时才补 1 起的序号，序号按资产路径排序分配，因此原样重复合并不会改名，生成的文件重新合并后仍是同一份 diff。
-- Builder 对非持久化的临时 Mesh、Texture、Material 使用 finally 释放；Importer 失败也释放临时数组。
+- Builder 对非持久化的临时 Mesh、Texture、Material 使用 finally 释放；TextureArrayWriter 失败也释放分格贴图并清理临时副本目录。
 - 配置结果引用在生成完成后发布，但资产导出不是文件事务；I/O 或导入中途失败可能留下部分新文件或已更新文件。修复原因后重新合并。
 - 旧 _Params.png、_Params.asset、_Sources.asset 与历史图集、Shader 副本都不自动删除或迁移。重新合并按新名字生成并绑定参数 LUT 与来源映射表；旧生成资产不会因改源码自动更新。
 
+### 原生数组迁移（2026-10-09）
+
+本仓库的两份 `.hmtexarray` 已替换为 PNG，沿用 GUID，材质引用的 local file ID 改为原生 Texture2DArray 的 18700000。两张原图实际文件是 512 与 1024 像素，已有 Default Max Size 将导入结果统一到 512。此次离线迁移按该尺寸生成 1024×512 的两列源图，缩放使用 Pillow Lanczos；这不是 Unity 的重采样结果，人工编译后需再次合并覆盖为 Unity 原生输出。没有修改源贴图或源 meta。
+
+其他工程不自动迁移未知旧引用：升级后重新合并以创建新数组并回绑本配置材质，手动替换其他资产对旧数组的直接引用，确认后清理旧文件。PNG/EXR 扩展名变化同样需要检查外部直接引用。
+
 ## 人工验证
+
+重点检查原生 Inspector 的 2D Array / Columns / Rows、各层方向与顺序、Alpha / 法线 / HDR、再次生成是否保留平台压缩设置、源图变化后重新合并、异常时临时目录是否清理，以及切 Android 后的尺寸与格式。
 
 检查来源索引切换、不同/相同参数、负数和大于 1 的数值、HDR 颜色、ST、UV/颜色动画数据、阴影和深度裁剪；核对同一网格、同一材质被多个来源交叉引用时几何只有一份、数组只为每个材质留一层，且各来源的数值与层不串用。顶点着色器用 Load 读来源映射表（顶点纹理获取），需在目标平台确认可用。再次合并后检查场景/Prefab 中的 Mesh 与 Material 引用；关闭重开编辑器后检查数组像素，以及目标平台包内格式。复制来源 Shader 路径还需确认注入副本能编译、风动等自有逻辑未被破坏、被隐藏来源不投影，并逐条处理头部注释里的待办。
 
